@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Mail, Lock, AlertCircle } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 
-export default function Login() {
-  const [isSignUp, setIsSignUp] = useState(false);
+export default function SignUp() {
+  const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -17,8 +18,7 @@ export default function Login() {
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/`,
-          // Force Google to show account picker
+          redirectTo: `${window.location.origin}/app`,
           queryParams: {
             prompt: 'select_account'
           }
@@ -34,43 +34,25 @@ export default function Login() {
     }
   };
 
-  const handleEmailAuth = async (e: React.FormEvent) => {
+  const handleEmailSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       setLoading(true);
       setError(null);
 
-      if (isSignUp) {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            emailRedirectTo: window.location.origin
-          }
-        });
-        if (error) throw error;
-        
-        // Check if email confirmation is required
-        if (data?.user && !data.session) {
-          setError('Success! Check your email for the confirmation link before signing in.');
-        } else if (data?.session) {
-          // User was created and logged in immediately (confirmation disabled)
-          setError('Account created successfully!');
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/app`
         }
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password
-        });
-        if (error) {
-          // Provide more helpful error messages
-          if (error.message.includes('Invalid login credentials')) {
-            throw new Error('Invalid email or password. If you just signed up, check your email for a confirmation link first.');
-          } else if (error.message.includes('Email not confirmed')) {
-            throw new Error('Please confirm your email address. Check your inbox for the confirmation link.');
-          }
-          throw error;
-        }
+      });
+      if (error) throw error;
+      
+      if (data?.user && !data.session) {
+        setError('Success! Check your email for the confirmation link before signing in.');
+      } else if (data?.session) {
+        navigate('/app');
       }
     } catch (error: any) {
       setError(error.message);
@@ -91,14 +73,14 @@ export default function Login() {
             Welcome to Tenantry
           </h1>
           <p className="text-gray-600 dark:text-gray-400">
-            {isSignUp ? 'Create your account to get started' : 'Sign in to your account'}
+            Create your account to get started
           </p>
         </div>
 
         {/* Error/Success Message */}
         {error && (
           <div className={`mb-4 p-3 rounded-lg flex items-start gap-2 ${
-            error.includes('Success') || error.includes('Check your email') || error.includes('created successfully')
+            error.includes('Success') || error.includes('Check your email')
               ? 'bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-200' 
               : 'bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200'
           }`}>
@@ -145,7 +127,7 @@ export default function Login() {
         </div>
 
         {/* Email/Password Form */}
-        <form onSubmit={handleEmailAuth} className="space-y-4">
+        <form onSubmit={handleEmailSignUp} className="space-y-4">
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Email
@@ -188,24 +170,22 @@ export default function Login() {
             disabled={loading}
             className="w-full bg-brand-500 hover:bg-brand-600 text-white rounded-lg px-4 py-3 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? 'Loading...' : isSignUp ? 'Sign Up' : 'Sign In'}
+            {loading ? 'Loading...' : 'Sign Up'}
           </button>
         </form>
 
-        {/* Toggle Sign Up / Sign In */}
+        {/* Toggle Sign In */}
         <div className="mt-6 text-center">
-          <button
-            onClick={() => {
-              setIsSignUp(!isSignUp);
-              setError(null);
-            }}
+          <Link
+            to="/auth/sign-in"
             className="text-brand-600 dark:text-brand-400 hover:text-brand-700 dark:hover:text-brand-300 text-sm font-medium"
           >
-            {isSignUp ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
-          </button>
+            Already have an account? Sign in
+          </Link>
         </div>
       </div>
     </div>
   );
 }
+
 

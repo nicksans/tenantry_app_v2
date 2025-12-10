@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
-import { TrendingUp, Users, DollarSign, ChevronDown, FileText, Download, Trash2, Loader2, CheckCircle, Sparkles, AlertTriangle, X } from 'lucide-react';
+import { TrendingUp, Users, DollarSign, ChevronDown, FileText, Download, Loader2, CheckCircle, Sparkles, Info } from 'lucide-react';
 import LocationAutocomplete from './LocationAutocomplete';
 import AddressAutocomplete from './AddressAutocomplete';
 import { supabase } from '../lib/supabase';
 
-type ReportType = 'rental' | 'comparative' | 'demographics' | null;
+type ReportType = 'rental' | 'comparative' | 'rental-market' | null;
 type LocationType = 'state' | 'city' | 'zip';
 
 interface ReportOption {
@@ -14,21 +14,13 @@ interface ReportOption {
   icon: typeof TrendingUp;
 }
 
-interface SavedReport {
-  id: string;
-  reportType: string;
-  location: string;
-  locationType: string;
-  createdAt: Date;
-  downloadUrl: string;
-}
-
 interface MarketReportsProps {
   userId?: string;
-  onNavigateToEmma?: () => void;
+  onNavigateToSupport?: () => void;
+  hideTitle?: boolean;
 }
 
-export default function MarketReports({ userId, onNavigateToEmma }: MarketReportsProps) {
+export default function MarketReports({ userId, onNavigateToSupport, hideTitle = false }: MarketReportsProps) {
   const [selectedReport, setSelectedReport] = useState<ReportType>(null);
   const [locationType, setLocationType] = useState<LocationType>('state');
   const [locationValue, setLocationValue] = useState('');
@@ -43,70 +35,51 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
   const [condition, setCondition] = useState('');
   const [additionalDetails, setAdditionalDetails] = useState('');
   const [maxDistance, setMaxDistance] = useState('1.00');
+  const [rentalStrategy, setRentalStrategy] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedReportUrl, setGeneratedReportUrl] = useState<string | null>(null);
-  const [savedReports, setSavedReports] = useState<SavedReport[]>([]);
-  const [reportToDelete, setReportToDelete] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [firstName, setFirstName] = useState<string | null>(null);
+  
+  // New fields for Rental Market Finder
+  const [region, setRegion] = useState('');
+  const [marketType, setMarketType] = useState('');
+  const [proximityCity, setProximityCity] = useState('');
+  const [primaryObjective, setPrimaryObjective] = useState('');
+  const [minPurchasePrice, setMinPurchasePrice] = useState('');
+  const [maxPurchasePrice, setMaxPurchasePrice] = useState('');
 
-  // Fetch user email on mount
+  // Fetch user email and first name on mount
   useEffect(() => {
-    const fetchUserEmail = async () => {
+    const fetchUserData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (user?.email) {
         setUserEmail(user.email);
       }
-    };
-    fetchUserEmail();
-  }, []);
-
-  // Load saved reports from localStorage on mount
-  useEffect(() => {
-    if (userId) {
-      const storageKey = `market_reports_${userId}`;
-      const saved = localStorage.getItem(storageKey);
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          // Convert date strings back to Date objects
-          const reports = parsed.map((report: any) => ({
-            ...report,
-            createdAt: new Date(report.createdAt)
-          }));
-          setSavedReports(reports);
-        } catch (error) {
-          console.error('Error loading saved reports:', error);
-        }
+      if (user?.user_metadata?.first_name) {
+        setFirstName(user.user_metadata.first_name);
       }
-    }
-  }, [userId]);
-
-  // Save reports to localStorage whenever they change
-  useEffect(() => {
-    if (userId && savedReports.length > 0) {
-      const storageKey = `market_reports_${userId}`;
-      localStorage.setItem(storageKey, JSON.stringify(savedReports));
-    }
-  }, [savedReports, userId]);
+    };
+    fetchUserData();
+  }, []);
 
   const reportOptions: ReportOption[] = [
     {
       id: 'rental',
-      title: 'Rental Market Report',
-      description: 'Generate a detailed rental market analysis for any state, city, or zip code.',
+      title: 'Rental Market Analysis',
+      description: 'Get comprehensive insights into any rental market (state, city, or zip) with accurate, up-to-date data.',
       icon: DollarSign
     },
     {
       id: 'comparative',
       title: 'Comparative Market Analysis',
-      description: 'Run a comparative market analysis for any address to see comps and determine property value.',
+      description: 'Generate professional CMAs for any address, without needing a realtor or MLS access.',
       icon: TrendingUp
     },
     {
-      id: 'demographics',
-      title: 'Neighborhood Demographics',
-      description: 'Detailed demographic information including population, income, and household data',
+      id: 'rental-market',
+      title: 'Rental Market Finder',
+      description: 'Find emerging rental markets that meet your criteria for cashflow and appreciation.',
       icon: Users
     }
   ];
@@ -128,27 +101,21 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
     // Generate a unique ID for this report
     const reportId = generateReportId();
     
-    // Get the report type display name
-    const reportTypeDisplay = reportOptions.find(r => r.id === selectedReport)?.title || 'Report';
-    
     let reportData: any;
     let webhookUrl: string;
     let filenameSuffix: string;
-    let displayLocation: string;
-    let locationTypeDisplay: string;
     
     if (selectedReport === 'comparative') {
       // CMA Report - use address
       webhookUrl = 'https://tenantry.app.n8n.cloud/webhook/cma';
       filenameSuffix = 'cma';
-      displayLocation = address;
-      locationTypeDisplay = 'Address';
       
       reportData = {
         owner_id: userId,
         user_email: userEmail,
+        first_name: firstName,
         report_id: reportId,
-        doc_type: 'market_report',
+        doc_type: 'cma',
         reportType: selectedReport,
         address,
         propertyType,
@@ -162,12 +129,32 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
         maxDistance: parseFloat(maxDistance),
         additionalDetails
       };
+    } else if (selectedReport === 'rental-market') {
+      // Rental Market Finder - use new fields
+      webhookUrl = 'https://tenantry.app.n8n.cloud/webhook/market-finder-report';
+      filenameSuffix = 'rentalmarketfinder';
+      
+      reportData = {
+        owner_id: userId,
+        user_email: userEmail,
+        first_name: firstName,
+        report_id: reportId,
+        doc_type: 'rental_market_finder',
+        reportType: selectedReport,
+        region,
+        marketType,
+        proximityCity: proximityCity || undefined,
+        primaryObjective: primaryObjective || undefined,
+        minPurchasePrice: minPurchasePrice || undefined,
+        maxPurchasePrice: maxPurchasePrice || undefined,
+        rentalStrategy: rentalStrategy || undefined,
+        propertyType,
+        additionalDetails
+      };
     } else {
-      // Rental Market Report - use location type
+      // Rental Market Analysis Report - use location type
       webhookUrl = 'https://tenantry.app.n8n.cloud/webhook/rental-market-analysis';
       filenameSuffix = 'rentalmarketreport';
-      displayLocation = locationValue;
-      locationTypeDisplay = locationType === 'city' ? 'City' : locationType === 'state' ? 'State' : 'Zip Code';
       
       // Parse city and state if location type is city
       let city = '';
@@ -187,8 +174,9 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
       reportData = {
         owner_id: userId,
         user_email: userEmail,
+        first_name: firstName,
         report_id: reportId,
-        doc_type: 'market_report',
+        doc_type: 'rental_market_analysis',
         reportType: selectedReport,
         locationType,
         locationValue,
@@ -197,6 +185,7 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
           city,
           state
         }),
+        rentalStrategy: rentalStrategy || undefined,
         propertyType,
         bedrooms: bedrooms ? parseInt(bedrooms) : undefined,
         bathrooms: bathrooms ? parseFloat(bathrooms) : undefined,
@@ -229,18 +218,6 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
         const downloadUrl = data.publicUrl;
         setGeneratedReportUrl(downloadUrl);
         setIsGenerating(false);
-        
-        // Add the report to saved reports
-        const newReport: SavedReport = {
-          id: reportId,
-          reportType: reportTypeDisplay,
-          location: displayLocation,
-          locationType: locationTypeDisplay,
-          createdAt: new Date(),
-          downloadUrl
-        };
-        
-        setSavedReports(prev => [newReport, ...prev]);
       } else {
         console.error('Webhook error:', response.status, response.statusText);
         alert('Failed to generate report. Please try again.');
@@ -259,6 +236,7 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
     setLocationValue('');
     setAddress('');
     setPropertyType('');
+    setRentalStrategy('');
     setBedrooms('');
     setBathrooms('');
     setNumberOfUnits('');
@@ -270,77 +248,13 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
     setAdditionalDetails('');
     setIsGenerating(false);
     setGeneratedReportUrl(null);
-  };
-
-  const handleDownloadReport = (report: SavedReport) => {
-    // Open the download URL in a new tab
-    window.open(report.downloadUrl, '_blank');
-  };
-
-  const handleDeleteReport = (reportId: string) => {
-    // Show confirmation UI
-    setReportToDelete(reportId);
-  };
-
-  const confirmDeleteReport = async () => {
-    if (!reportToDelete) return;
-    
-    try {
-      console.log('Deleting report with ID:', reportToDelete);
-      console.log('Owner ID:', userId);
-      
-      // Call the n8n webhook to delete the report
-      const response = await fetch('https://tenantry.app.n8n.cloud/webhook/delete-report', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          report_id: reportToDelete,
-          owner_id: userId,
-        }),
-      });
-
-      console.log('Delete response status:', response.status);
-
-      if (!response.ok) {
-        throw new Error('Delete failed');
-      }
-
-      // Remove the report from saved reports
-      setSavedReports(prev => {
-        const updated = prev.filter(report => report.id !== reportToDelete);
-        // Update localStorage immediately
-        if (userId) {
-          const storageKey = `market_reports_${userId}`;
-          if (updated.length === 0) {
-            localStorage.removeItem(storageKey);
-          } else {
-            localStorage.setItem(storageKey, JSON.stringify(updated));
-          }
-        }
-        return updated;
-      });
-      
-      // Clear the deletion state
-      setReportToDelete(null);
-      
-    } catch (error) {
-      console.error('Error deleting report:', error);
-      setDeleteError('Failed to delete report. Please try again.');
-      setTimeout(() => setDeleteError(null), 7000);
-      setReportToDelete(null);
-    }
-  };
-
-  const cancelDeleteReport = () => {
-    setReportToDelete(null);
-  };
-
-  const getReportIcon = (reportType: string) => {
-    if (reportType.includes('Rental')) return DollarSign;
-    if (reportType.includes('Demographics')) return Users;
-    return TrendingUp;
+    // Reset new Rental Market Finder fields
+    setRegion('');
+    setMarketType('');
+    setProximityCity('');
+    setPrimaryObjective('');
+    setMinPurchasePrice('');
+    setMaxPurchasePrice('');
   };
 
   const usStates = [
@@ -397,13 +311,16 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
   ];
 
   return (
-    <div className="max-w-4xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-3xl font-semibold text-gray-900 dark:text-gray-100 mb-2">Market Reports</h1>
-        <p className="text-gray-600 dark:text-gray-400">
-        Generate detailed market research reports for any location
-        </p>
-      </div>
+    <div className={hideTitle ? '' : 'p-6'}>
+      <div className={hideTitle ? '' : 'max-w-4xl mx-auto'}>
+        {!hideTitle && (
+          <div className="mb-8">
+            <h1 className="text-3xl font-semibold text-gray-900 dark:text-gray-100 mb-2">Pro Tools</h1>
+            <p className="text-gray-600 dark:text-gray-400">
+              Generate detailed, downloadable market research reports for any location
+            </p>
+          </div>
+        )}
 
       {!selectedReport ? (
         // Report Type Selection
@@ -414,8 +331,13 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
               <button
                 key={option.id}
                 onClick={() => setSelectedReport(option.id)}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 hover:border-brand-500 dark:hover:border-brand-500 hover:shadow-md transition-all text-left"
+                className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 min-h-[180px] hover:border-brand-500 dark:hover:border-brand-500 hover:shadow-md hover:-translate-y-1 transition-all duration-200 text-left relative"
               >
+                <div className="absolute top-4 right-4">
+                  <span className="bg-brand-500 text-white text-xs font-semibold px-2 py-1 rounded">
+                    Pro
+                  </span>
+                </div>
                 <div className="flex items-center gap-3 mb-3">
                   <div className="p-2 bg-brand-50 dark:bg-brand-900/30 rounded-lg">
                     <Icon className="w-6 h-6 text-brand-600 dark:text-brand-400" />
@@ -469,10 +391,16 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
                   />
                 </div>
 
-                {/* Maximum Distance field for CMA */}
+                {/* Radius field for CMA */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Maximum Distance for Comparables (miles)
+                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Radius
+                    <div className="group relative">
+                      <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                      <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block w-64 p-2 bg-gray-900 text-white text-xs rounded shadow-lg z-10">
+                        Select the maximum distance to find comparable properties
+                      </div>
+                    </div>
                   </label>
                   <div className="relative">
                     <select
@@ -492,13 +420,152 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
                     </select>
                     <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
                   </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Select the maximum distance to find comparable properties
-                  </p>
+                </div>
+              </>
+            ) : selectedReport === 'rental-market' ? (
+              // Rental Market Finder fields
+              <>
+                {/* Region Dropdown */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Region
+                    <div className="group relative">
+                      <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                      <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block w-64 p-2 bg-gray-900 text-white text-xs rounded shadow-lg z-10">
+                        Limit the search to a specific U.S. region
+                      </div>
+                    </div>
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={region}
+                      onChange={(e) => setRegion(e.target.value)}
+                      className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      required
+                    >
+                      <option value="">Select a region</option>
+                      <option value="all">Any Region</option>
+                      <option value="northeast">Northeast</option>
+                      <option value="southeast">Southeast</option>
+                      <option value="midwest">Midwest</option>
+                      <option value="southwest">Southwest</option>
+                      <option value="west">West</option>
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                  </div>
+                </div>
+
+                {/* Location Type Dropdown */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Location Type
+                    <div className="group relative">
+                      <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                      <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block w-64 p-2 bg-gray-900 text-white text-xs rounded shadow-lg z-10">
+                        The type of location you are interested in
+                      </div>
+                    </div>
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={marketType}
+                      onChange={(e) => setMarketType(e.target.value)}
+                      className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      required
+                    >
+                      <option value="">Select location type</option>
+                      <option value="state">State</option>
+                      <option value="city">City</option>
+                      <option value="zip">Zip Code</option>
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                  </div>
+                </div>
+
+                {/* Nearby City Input */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Nearby city
+                    <div className="group relative">
+                      <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                      <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block w-64 p-2 bg-gray-900 text-white text-xs rounded shadow-lg z-10">
+                        Select a city to stay within a close proximity to (within 50 miles)
+                      </div>
+                    </div>
+                  </label>
+                  <LocationAutocomplete
+                    value={proximityCity}
+                    onChange={setProximityCity}
+                    locationType="city"
+                    placeholder="e.g., Wilmington, NC"
+                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                  />
+                </div>
+
+                {/* Primary Objective Radio Buttons */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Primary Objective
+                    <div className="group relative">
+                      <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                      <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block w-64 p-2 bg-gray-900 text-white text-xs rounded shadow-lg z-10">
+                      Choose whether you want to prioritize cash flow, long-term appreciation, or a balanced mix of both
+                      </div>
+                    </div>
+                  </label>
+                  <div className="space-y-2">
+                    {[
+                      { value: 'cash-flow', label: 'Maximize Cash Flow (Higher Cap Rate)' },
+                      { value: 'appreciation', label: 'Maximize Appreciation (Lower Cap Rate)' },
+                      { value: 'balanced', label: 'Balanced Cash Flow and Appreciation (Mid Cap Rate)' },
+                      { value: 'no-preference', label: 'No Preference' }
+                    ].map((objective) => (
+                      <label key={objective.value} className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="primaryObjective"
+                          value={objective.value}
+                          checked={primaryObjective === objective.value}
+                          onChange={(e) => setPrimaryObjective(e.target.value)}
+                          className="w-4 h-4 text-brand-600 bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-brand-500"
+                          required
+                        />
+                        <span className="text-sm text-gray-700 dark:text-gray-300">{objective.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Min Purchase Price */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Min Purchase Price
+                  </label>
+                  <input
+                    type="text"
+                    value={minPurchasePrice}
+                    onChange={(e) => setMinPurchasePrice(e.target.value)}
+                    placeholder="e.g., $100,000"
+                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                  />
+                </div>
+
+                {/* Max Purchase Price */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Max Purchase Price
+                  </label>
+                  <input
+                    type="text"
+                    value={maxPurchasePrice}
+                    onChange={(e) => setMaxPurchasePrice(e.target.value)}
+                    placeholder="e.g., $250,000"
+                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                  />
                 </div>
               </>
             ) : (
-              // Location Type fields for Rental Market Report
+              // Location Type fields for Rental Market Analysis Report
               <>
                 {/* Location Type Dropdown */}
                 <div>
@@ -557,40 +624,93 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
                           : 'e.g., 90210'
                       }
                       required
-                      className="w-full pr-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                      className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
                     />
                   )}
                 </div>
               </>
             )}
 
-            {/* Property Type Dropdown */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Property Type
-              </label>
-              <div className="relative">
-                <select
-                  value={propertyType}
-                  onChange={(e) => setPropertyType(e.target.value)}
-                  className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                  required
-                >
-                  <option value="">Select property type</option>
-                  <option value="single-family">Single Family</option>
-                  <option value="condo">Condo</option>
-                  <option value="townhouse">Townhouse</option>
-                  <option value="manufactured">Manufactured</option>
-                  <option value="multi-family">Multi-Family (2-4 units)</option>
-                  <option value="apartment">Apartment (5+ units)</option>
-                  <option value="land">Land</option>
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+            {/* Rental Strategy Dropdown - For Rental Market Analysis and Rental Market Finder */}
+            {(selectedReport === 'rental' || selectedReport === 'rental-market') && (
+              <div>
+                <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Rental Strategy
+                  <div className="group relative">
+                    <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                    <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block w-64 p-2 bg-gray-900 text-white text-xs rounded shadow-lg z-10">
+                      Select the type of rental strategy you would like the report to focus on
+                    </div>
+                  </div>
+                </label>
+                <div className="relative">
+                  <select
+                    value={rentalStrategy}
+                    onChange={(e) => setRentalStrategy(e.target.value)}
+                    className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    required
+                  >
+                    <option value="">Select rental strategy</option>
+                    <option value="short-term">Short-Term Rental</option>
+                    <option value="medium-term">Medium-Term Rental</option>
+                    <option value="long-term">Long-Term Rental</option>
+                  </select>
+                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Number of Units - Shown for Multi-Family and Apartment */}
-            {(propertyType === 'multi-family' || propertyType === 'apartment') && (
+            {/* Property Type Dropdown */}
+            {selectedReport === 'rental-market' ? (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Property Type
+                </label>
+                <div className="relative">
+                  <select
+                    value={propertyType}
+                    onChange={(e) => setPropertyType(e.target.value)}
+                    className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    required
+                  >
+                    <option value="">Select property type</option>
+                    <option value="Single Family">Single Family</option>
+                    <option value="Condo">Condo</option>
+                    <option value="Townhouse">Townhouse</option>
+                    <option value="Manufactured">Manufactured</option>
+                    <option value="Multi-Family">Multi-Family (2-4 units)</option>
+                    <option value="Apartment">Apartment (5+ units)</option>
+                  </select>
+                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                </div>
+              </div>
+            ) : (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Property Type
+                </label>
+                <div className="relative">
+                  <select
+                    value={propertyType}
+                    onChange={(e) => setPropertyType(e.target.value)}
+                    className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    required
+                  >
+                    <option value="">Select property type</option>
+                    <option value="Single Family">Single Family</option>
+                    <option value="Condo">Condo</option>
+                    <option value="Townhouse">Townhouse</option>
+                    <option value="Manufactured">Manufactured</option>
+                    <option value="Multi-Family">Multi-Family (2-4 units)</option>
+                    <option value="Apartment">Apartment (5+ units)</option>
+                  </select>
+                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                </div>
+              </div>
+            )}
+
+            {/* Number of Units - Shown for Multi-Family and Apartment (except Rental Market Finder) */}
+            {(propertyType === 'multi-family' || propertyType === 'apartment') && selectedReport !== 'rental-market' && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Number of Units
@@ -624,57 +744,61 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
               </div>
             )}
 
-            {/* Bedrooms */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Bedrooms
-              </label>
-              <div className="relative">
-                <select
-                  value={bedrooms}
-                  onChange={(e) => setBedrooms(e.target.value)}
-                  className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                  required
-                >
-                  <option value="">Select bedrooms</option>
-                  <option value="0">Studio</option>
-                  <option value="1">1</option>
-                  <option value="2">2</option>
-                  <option value="3">3</option>
-                  <option value="4">4</option>
-                  <option value="5">5</option>
-                  <option value="6">6+</option>
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+            {/* Bedrooms - Hidden for Rental Market Finder */}
+            {selectedReport !== 'rental-market' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Bedrooms <span className="text-xs text-gray-500 dark:text-gray-400">(per unit)</span>
+                </label>
+                <div className="relative">
+                  <select
+                    value={bedrooms}
+                    onChange={(e) => setBedrooms(e.target.value)}
+                    className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    required
+                  >
+                    <option value="">Select bedrooms</option>
+                    <option value="0">Studio</option>
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                    <option value="6">6+</option>
+                  </select>
+                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Bathrooms */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Bathrooms
-              </label>
-              <div className="relative">
-                <select
-                  value={bathrooms}
-                  onChange={(e) => setBathrooms(e.target.value)}
-                  className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                  required
-                >
-                  <option value="">Select bathrooms</option>
-                  <option value="1">1</option>
-                  <option value="1.5">1.5</option>
-                  <option value="2">2</option>
-                  <option value="2.5">2.5</option>
-                  <option value="3">3</option>
-                  <option value="3.5">3.5</option>
-                  <option value="4">4</option>
-                  <option value="4.5">4.5</option>
-                  <option value="5">5+</option>
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+            {/* Bathrooms - Hidden for Rental Market Finder */}
+            {selectedReport !== 'rental-market' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Bathrooms <span className="text-xs text-gray-500 dark:text-gray-400">(per unit)</span>
+                </label>
+                <div className="relative">
+                  <select
+                    value={bathrooms}
+                    onChange={(e) => setBathrooms(e.target.value)}
+                    className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    required
+                  >
+                    <option value="">Select bathrooms</option>
+                    <option value="1">1</option>
+                    <option value="1.5">1.5</option>
+                    <option value="2">2</option>
+                    <option value="2.5">2.5</option>
+                    <option value="3">3</option>
+                    <option value="3.5">3.5</option>
+                    <option value="4">4</option>
+                    <option value="4.5">4.5</option>
+                    <option value="5">5+</option>
+                  </select>
+                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                </div>
               </div>
-            </div>
+            )}
 
             {/* CMA-specific fields */}
             {selectedReport === 'comparative' && (
@@ -698,7 +822,7 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
                 {/* Square Footage */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Square Footage
+                    Square Footage <span className="text-xs text-gray-500 dark:text-gray-400">(per unit)</span>
                   </label>
                   <input
                     type="number"
@@ -710,17 +834,18 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
                   />
                 </div>
 
-                {/* Lot Size (sqft) */}
+                {/* Lot Size (acres) */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Lot Size (sqft)
+                    Lot Size (acres)
                   </label>
                   <input
                     type="number"
                     value={lotSize}
                     onChange={(e) => setLotSize(e.target.value)}
-                    placeholder="e.g., 8000"
-                    min="1"
+                    placeholder="e.g., 0.18"
+                    min="0.01"
+                    step="0.01"
                     className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
                   />
                 </div>
@@ -780,7 +905,7 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
               </div>
             )}
 
-            {selectedReport === 'demographics' && (
+            {selectedReport === 'rental-market' && (
               <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
                 <p className="text-sm text-gray-600 dark:text-gray-400">
                   📊 Your report will include: Population statistics, median household income, age distribution, education levels, and employment data
@@ -799,7 +924,7 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
                       Generating your report...
                     </h3>
                     <p className="text-sm text-blue-700 dark:text-blue-300">
-                      Estimated time: ~2 minutes. Please don't close this window.
+                      Estimated time: 3-5 minutes. You'll receive an email with your report shortly.
                     </p>
                   </div>
                 </div>
@@ -827,13 +952,13 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
                       <div className="flex items-start gap-2 text-sm text-green-700 dark:text-green-300">
                         <Sparkles className="w-4 h-4 flex-shrink-0 mt-0.5" />
                         <p>
-                          Tip: Your report has been added to Emma's knowledge base. 
+                          Tip: Your report has been added to the Tenantry AI knowledge base. 
                           <button 
                             type="button"
                             className="font-semibold underline hover:no-underline ml-1"
-                            onClick={() => onNavigateToEmma?.()}
+                            onClick={() => onNavigateToSupport?.()}
                           >
-                            Ask her anything about your report!
+                            Ask us anything about your report!
                           </button>
                         </p>
                       </div>
@@ -852,6 +977,12 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
                   className="px-6 py-3 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                 >
                   Cancel
+                </button>
+                <button
+                  type="button"
+                  className="px-6 py-3 border border-brand-500 dark:border-brand-400 text-brand-600 dark:text-brand-400 rounded-lg hover:bg-brand-50 dark:hover:bg-brand-900/20 transition-colors font-medium"
+                >
+                  View Sample Report
                 </button>
                 <button
                   type="submit"
@@ -877,112 +1008,6 @@ export default function MarketReports({ userId, onNavigateToEmma }: MarketReport
           </form>
         </div>
       )}
-
-      {/* Your Market Reports Section */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 mt-8">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-gray-900 dark:text-gray-100">Your Market Reports</h3>
-          <span className="text-sm text-gray-600 dark:text-gray-400">
-            {savedReports.length} report{savedReports.length !== 1 ? 's' : ''} saved
-          </span>
-        </div>
-
-        {/* Delete Confirmation Message */}
-        {reportToDelete && (
-          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 mb-4">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <h4 className="font-semibold text-red-900 dark:text-red-100 mb-1">
-                  Delete Report?
-                </h4>
-                <p className="text-sm text-red-700 dark:text-red-300 mb-3">
-                  Are you sure you want to delete this report? Emma will also forget its contents. This action cannot be undone.
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={cancelDeleteReport}
-                    className="px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors text-sm font-medium"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={confirmDeleteReport}
-                    className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm font-medium"
-                  >
-                    Delete Report
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Delete Error Message */}
-        {deleteError && (
-          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 mb-4 flex items-center gap-3">
-            <div className="flex-shrink-0 w-8 h-8 bg-red-500 rounded-full flex items-center justify-center">
-              <X className="w-5 h-5 text-white" />
-            </div>
-            <div className="flex-1">
-              <h4 className="font-semibold text-red-900 dark:text-red-100">Delete failed</h4>
-              <p className="text-sm text-red-700 dark:text-red-300">{deleteError}</p>
-            </div>
-            <button
-              onClick={() => setDeleteError(null)}
-              className="flex-shrink-0 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-        )}
-
-        {savedReports.length === 0 ? (
-          <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-            <FileText className="w-12 h-12 mx-auto mb-2 text-gray-400 dark:text-gray-600" />
-            <p>No reports generated yet</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {savedReports.map((report) => {
-              const ReportIcon = getReportIcon(report.reportType);
-              return (
-                <div
-                  key={report.id}
-                  className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg group hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
-                >
-                  <div className="flex items-center gap-3 flex-1 min-w-0">
-                    <ReportIcon className="w-5 h-5 text-brand-600 dark:text-brand-400 flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
-                        {report.reportType}
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
-                        {report.locationType} • {report.location} • {report.createdAt.toLocaleDateString()}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => handleDownloadReport(report)}
-                      className="p-2 text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300 transition-colors"
-                      title="Download report"
-                    >
-                      <Download className="w-5 h-5" />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteReport(report.id)}
-                      className="p-2 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                      title="Delete report"
-                    >
-                      <Trash2 className="w-5 h-5" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
       </div>
     </div>
   );

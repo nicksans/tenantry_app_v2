@@ -1,384 +1,470 @@
 import { useState } from 'react';
-import { FileText, Sparkles, MessageSquareText, ShieldCheck, Upload, ChevronDown } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Calculator, ChevronDown, Loader2, Info, DollarSign, Building2, ArrowLeft, TrendingUp } from 'lucide-react';
+import AddressAutocomplete from './AddressAutocomplete';
+import MarketReports from './MarketReports';
+import LongTermRentalCalculator from './LongTermRentalCalculator';
+import FreeFormTool from './FreeFormTool';
 
-type ToolType = 'lease-audit' | 'listing-generator' | 'tenant-responses' | 'tenant-screening' | null;
+type QuickToolType = 'rent-estimator' | 'value-estimator' | 'rental-calculator' | 'free-form-tool' | null;
 
-interface ToolOption {
-  id: ToolType;
-  title: string;
-  description: string;
-  icon: typeof FileText;
+interface ToolsProps {
+  userId?: string;
 }
 
-export default function Tools() {
-  const [selectedTool, setSelectedTool] = useState<ToolType>(null);
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [state, setState] = useState('');
-  const [inputText, setInputText] = useState('');
-  const [additionalDetails, setAdditionalDetails] = useState('');
-  const [isDragging, setIsDragging] = useState(false);
+export default function Tools({ userId }: ToolsProps) {
+  const navigate = useNavigate();
+  
+  // Quick Tools State
+  const [selectedQuickTool, setSelectedQuickTool] = useState<QuickToolType>(null);
+  const [quickToolAddress, setQuickToolAddress] = useState('');
+  const [quickToolPropertyType, setQuickToolPropertyType] = useState('');
+  const [quickToolRadius, setQuickToolRadius] = useState('1.00');
+  const [quickToolBedrooms, setQuickToolBedrooms] = useState('');
+  const [quickToolBathrooms, setQuickToolBathrooms] = useState('');
+  const [quickToolNumberOfUnits, setQuickToolNumberOfUnits] = useState('');
+  const [quickToolSqft, setQuickToolSqft] = useState('');
+  const [isCalculatingQuick, setIsCalculatingQuick] = useState(false);
 
-  const toolOptions: ToolOption[] = [
+  const quickToolOptions = [
     {
-      id: 'lease-audit',
-      title: 'Lease Audit',
-      description: 'Upload a lease and get AI-powered analysis with state-specific recommendations and suggestions',
-      icon: FileText
+      id: 'free-form-tool' as QuickToolType,
+      title: 'Free Form Tool',
+      description: 'Compare economic indicators, population trends, and rental market data across multiple cities or zip codes.',
+      icon: TrendingUp
     },
     {
-      id: 'listing-generator',
-      title: 'Listing Description Generator',
-      description: 'Create compelling property listings that attract quality tenants and showcase your property',
-      icon: Sparkles
+      id: 'rent-estimator' as QuickToolType,
+      title: 'Rent Estimator',
+      description: 'Get an instant rent estimate with comparable rental data for any address.',
+      icon: Building2
     },
     {
-      id: 'tenant-responses',
-      title: 'Tenant Response Assistant',
-      description: 'Generate professional responses to tenant inquiries, maintenance requests, and communications',
-      icon: MessageSquareText
+      id: 'value-estimator' as QuickToolType,
+      title: 'Value Estimator',
+      description: 'Get an instant property value estimate with comparable sales data for any address.',
+      icon: DollarSign
     },
     {
-      id: 'tenant-screening',
-      title: 'Tenant Screening & Fraud Detection',
-      description: 'AI-powered analysis to help identify potential red flags and verify tenant information',
-      icon: ShieldCheck
+      id: 'rental-calculator' as QuickToolType,
+      title: 'Rental Property Calculator',
+      description: 'Calculate potential returns, cash flow, and key metrics for your rental property investment',
+      icon: Calculator
+    },
+    {
+      id: null,
+      title: 'Market Finder',
+      description: 'Discover real estate markets that match your investment criteria and goals.',
+      icon: Building2
+    },
+    {
+      id: null,
+      title: 'Fix & Flip Calculator',
+      description: 'Calculate potential profits and analyze fix-and-flip investment opportunities.',
+      icon: Calculator
+    },
+    {
+      id: null,
+      title: 'Rehab Estimator',
+      description: 'Estimate renovation costs and budget for property rehabilitation projects.',
+      icon: Building2
+    },
+    {
+      id: null,
+      title: 'Mortgage Calculator',
+      description: 'Calculate mortgage payments, interest, and amortization schedules.',
+      icon: Calculator
     }
   ];
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const resetQuickToolForm = () => {
+    setSelectedQuickTool(null);
+    setQuickToolAddress('');
+    setQuickToolPropertyType('');
+    setQuickToolRadius('1.00');
+    setQuickToolBedrooms('');
+    setQuickToolBathrooms('');
+    setQuickToolNumberOfUnits('');
+    setQuickToolSqft('');
+    setIsCalculatingQuick(false);
+  };
+
+  // Handle Quick Tool Submission (Rent/Value Estimators)
+  const handleQuickToolSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // This will be connected to n8n webhook later
-    console.log('Form submitted:', {
-      toolType: selectedTool,
-      uploadedFile,
-      state,
-      inputText,
-      additionalDetails
-    });
-  };
-
-  const resetForm = () => {
-    setSelectedTool(null);
-    setUploadedFile(null);
-    setState('');
-    setInputText('');
-    setAdditionalDetails('');
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setUploadedFile(e.target.files[0]);
-    }
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
     
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setUploadedFile(e.dataTransfer.files[0]);
+    if (selectedQuickTool === 'rental-calculator' || selectedQuickTool === 'free-form-tool') {
+      return;
+    }
+
+    setIsCalculatingQuick(true);
+    
+    const estimateData = {
+      owner_id: userId,
+      address: quickToolAddress,
+      propertyType: quickToolPropertyType,
+      radius: parseFloat(quickToolRadius),
+      bedrooms: quickToolBedrooms !== '' ? parseInt(quickToolBedrooms) : undefined,
+      bathrooms: quickToolBathrooms !== '' ? parseFloat(quickToolBathrooms) : undefined,
+      sqft: quickToolSqft !== '' ? parseInt(quickToolSqft) : undefined,
+    };
+
+    const isRentEstimator = selectedQuickTool === 'rent-estimator';
+    const webhookUrl = isRentEstimator 
+      ? 'https://tenantry.app.n8n.cloud/webhook/rent-estimator'
+      : 'https://tenantry.app.n8n.cloud/webhook/value-estimator';
+
+    // For value estimator, add the necessary fields
+    if (!isRentEstimator) {
+      Object.assign(estimateData, {
+        maxRadius: parseFloat(quickToolRadius),
+        numberOfUnits: (quickToolPropertyType === 'Multi-Family' || quickToolPropertyType === 'Apartment') 
+          ? quickToolNumberOfUnits 
+          : undefined,
+      });
+    }
+
+    try {
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(estimateData),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to calculate estimate');
+      }
+
+      const responseData = await response.json();
+      console.log('📥 Webhook response:', responseData);
+      
+      const estimateId = isRentEstimator
+        ? (responseData.rent_estimate_id || responseData.estimate_id || responseData.id)
+        : (responseData.property_estimate_id || responseData.estimate_id || responseData.id);
+      
+      if (estimateId) {
+        console.log('✅ Navigating to results:', estimateId);
+        const resultsPath = isRentEstimator 
+          ? `/app/tools/results/${estimateId}`
+          : `/app/tools/value-results/${estimateId}`;
+        navigate(resultsPath);
+      } else {
+        console.error('❌ No estimate ID returned from webhook. Response:', responseData);
+        alert('No estimate ID received from server. Please check the n8n workflow response.');
+      }
+      
+    } catch (error) {
+      console.error('❌ Error calculating estimate:', error);
+      alert(`Failed to calculate estimate: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsCalculatingQuick(false);
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-3xl font-semibold text-gray-900 dark:text-gray-100 mb-2">Tools</h1>
-        <p className="text-gray-600 dark:text-gray-400">
-          AI-powered tools to help you manage your rental properties more efficiently
-        </p>
-      </div>
-
-      {!selectedTool ? (
-        // Tool Selection Grid
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {toolOptions.map((option) => {
-            const Icon = option.icon;
-            return (
-              <button
-                key={option.id}
-                onClick={() => setSelectedTool(option.id)}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 hover:border-brand-500 dark:hover:border-brand-500 hover:shadow-md transition-all text-left"
-              >
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="p-2 bg-brand-50 dark:bg-brand-900/30 rounded-lg">
-                    <Icon className="w-6 h-6 text-brand-600 dark:text-brand-400" />
-                  </div>
-                </div>
-                <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-2">
-                  {option.title}
-                </h3>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  {option.description}
-                </p>
-              </button>
-            );
-          })}
-        </div>
-      ) : (
-        // Tool Form
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              {(() => {
-                const ToolIcon = toolOptions.find(t => t.id === selectedTool)?.icon || FileText;
-                return <ToolIcon className="w-6 h-6 text-brand-600 dark:text-brand-400" />;
-              })()}
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
-                {toolOptions.find(t => t.id === selectedTool)?.title}
-              </h2>
-            </div>
-            <button
-              onClick={resetForm}
-              className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-            >
-              Change Tool
-            </button>
+    <div className="p-6">
+      <div className="max-w-6xl mx-auto">
+        {/* Only show main header and description when no tool is selected */}
+        {!selectedQuickTool && (
+          <div className="mb-10">
+            <h1 className="text-3xl font-semibold text-gray-900 dark:text-gray-100 mb-2">Analysis Tools</h1>
+            <p className="text-gray-600 dark:text-gray-400">
+              Access fast, accurate tools to estimate rents, evaluate property values, and generate comprehensive market reports
+            </p>
           </div>
+        )}
 
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Lease Audit Tool */}
-            {selectedTool === 'lease-audit' && (
-              <>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Upload Lease Document
-                  </label>
-                  <div 
-                    className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
-                      isDragging 
-                        ? 'border-brand-500 bg-brand-50 dark:bg-brand-900/20' 
-                        : 'border-gray-300 dark:border-gray-600 hover:border-brand-500 dark:hover:border-brand-500'
+        {/* Quick Tools Section */}
+        <div className="mb-12">
+          {/* Only show section header when no tool is selected */}
+          {!selectedQuickTool && (
+            <>
+              <div className="flex items-center gap-3 mb-6">
+                <div className="h-1 w-12 bg-brand-500 rounded"></div>
+                <h2 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">Quick Tools</h2>
+              </div>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+                Get instant property estimates and calculations in seconds
+              </p>
+            </>
+          )}
+          
+          {!selectedQuickTool ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {quickToolOptions.map((option, index) => {
+                const Icon = option.icon;
+                const isClickable = option.id !== null;
+                const Element = isClickable ? 'button' : 'div';
+                return (
+                  <Element
+                    key={option.id || `tool-${index}`}
+                    onClick={isClickable ? () => setSelectedQuickTool(option.id) : undefined}
+                    className={`bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 min-h-[180px] transition-all duration-200 text-left ${
+                      isClickable 
+                        ? 'hover:border-brand-500 dark:hover:border-brand-500 hover:shadow-md hover:-translate-y-1 cursor-pointer' 
+                        : 'opacity-60 cursor-not-allowed'
                     }`}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
                   >
-                    <Upload className="w-12 h-12 mx-auto mb-3 text-gray-400" />
-                    <input
-                      type="file"
-                      id="lease-upload"
-                      onChange={handleFileUpload}
-                      accept=".pdf,.doc,.docx"
-                      className="hidden"
-                    />
-                    <label
-                      htmlFor="lease-upload"
-                      className="cursor-pointer text-brand-600 dark:text-brand-400 hover:text-brand-700 dark:hover:text-brand-300 font-medium"
-                    >
-                      Click to upload
-                    </label>
-                    <span className="text-gray-500 dark:text-gray-400"> or drag and drop</span>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                      PDF, DOC, or DOCX (max 10MB)
-                    </p>
-                    {uploadedFile && (
-                      <div className="mt-3 text-sm text-gray-700 dark:text-gray-300">
-                        ✓ {uploadedFile.name}
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="p-2 bg-brand-50 dark:bg-brand-900/30 rounded-lg">
+                        <Icon className="w-6 h-6 text-brand-600 dark:text-brand-400" />
                       </div>
-                    )}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Property State
-                  </label>
-                  <div className="relative">
-                    <select
-                      value={state}
-                      onChange={(e) => setState(e.target.value)}
-                      className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                      required
-                    >
-                      <option value="">Select a state</option>
-                      <option value="CA">California</option>
-                      <option value="NY">New York</option>
-                      <option value="TX">Texas</option>
-                      <option value="FL">Florida</option>
-                      {/* Add more states as needed */}
-                    </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
-                  </div>
-                </div>
-
-                <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    🔍 Emma will review your lease for: state law compliance, missing clauses, potential issues, and provide specific recommendations
-                  </p>
-                </div>
-              </>
-            )}
-
-            {/* Listing Description Generator */}
-            {selectedTool === 'listing-generator' && (
-              <>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Property Details
-                  </label>
-                  <textarea
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    placeholder="Enter property details (e.g., bedrooms, bathrooms, square footage, amenities, location features)..."
-                    rows={6}
-                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 resize-none"
-                    required
-                  />
-                </div>
-
-                <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    ✨ Emma will create a compelling listing description that highlights your property's best features and attracts quality tenants
-                  </p>
-                </div>
-              </>
-            )}
-
-            {/* Tenant Response Assistant */}
-            {selectedTool === 'tenant-responses' && (
-              <>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Tenant Message or Inquiry
-                  </label>
-                  <textarea
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    placeholder="Paste the tenant's message or describe the situation you need to respond to..."
-                    rows={6}
-                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 resize-none"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Response Tone (Optional)
-                  </label>
-                  <div className="relative">
-                    <select
-                      value={additionalDetails}
-                      onChange={(e) => setAdditionalDetails(e.target.value)}
-                      className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                    >
-                      <option value="">Professional (default)</option>
-                      <option value="friendly">Friendly</option>
-                      <option value="formal">Formal</option>
-                      <option value="empathetic">Empathetic</option>
-                    </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
-                  </div>
-                </div>
-
-                <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    💬 Emma will generate a professional response that maintains good tenant relationships while protecting your interests
-                  </p>
-                </div>
-              </>
-            )}
-
-            {/* Tenant Screening & Fraud Detection */}
-            {selectedTool === 'tenant-screening' && (
-              <>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Tenant Information
-                  </label>
-                  <textarea
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    placeholder="Enter tenant application details, employment information, references, or any concerns you'd like Emma to analyze..."
-                    rows={6}
-                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 resize-none"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Upload Documents (Optional)
-                  </label>
-                  <div 
-                    className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
-                      isDragging 
-                        ? 'border-brand-500 bg-brand-50 dark:bg-brand-900/20' 
-                        : 'border-gray-300 dark:border-gray-600 hover:border-brand-500 dark:hover:border-brand-500'
-                    }`}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                  >
-                    <Upload className="w-12 h-12 mx-auto mb-3 text-gray-400" />
-                    <input
-                      type="file"
-                      id="screening-upload"
-                      onChange={handleFileUpload}
-                      accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
-                      multiple
-                      className="hidden"
-                    />
-                    <label
-                      htmlFor="screening-upload"
-                      className="cursor-pointer text-brand-600 dark:text-brand-400 hover:text-brand-700 dark:hover:text-brand-300 font-medium"
-                    >
-                      Click to upload
-                    </label>
-                    <span className="text-gray-500 dark:text-gray-400"> or drag and drop</span>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                      Pay stubs, ID, references, etc.
+                    </div>
+                    <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-2">
+                      {option.title}
+                    </h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {option.description}
                     </p>
-                    {uploadedFile && (
-                      <div className="mt-3 text-sm text-gray-700 dark:text-gray-300">
-                        ✓ {uploadedFile.name}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    🛡️ Emma will analyze the information for potential red flags, inconsistencies, and provide guidance on fair housing compliance
-                  </p>
-                </div>
-              </>
-            )}
-
-            {/* Submit Button */}
-            <div className="flex gap-3 pt-4">
-              <button
-                type="button"
-                onClick={resetForm}
-                className="px-6 py-3 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="flex-1 bg-brand-500 hover:bg-brand-600 text-white px-6 py-3 rounded-lg transition-colors font-medium"
-              >
-                Generate Analysis
-              </button>
+                  </Element>
+                );
+              })}
             </div>
-          </form>
+          ) : (
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  {(() => {
+                    const ToolIcon = quickToolOptions.find(t => t.id === selectedQuickTool)?.icon || Calculator;
+                    return <ToolIcon className="w-6 h-6 text-brand-600 dark:text-brand-400" />;
+                  })()}
+                  <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+                    {quickToolOptions.find(t => t.id === selectedQuickTool)?.title}
+                  </h2>
+                </div>
+                <button
+                  onClick={resetQuickToolForm}
+                  className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  Back to Analysis Tools
+                </button>
+              </div>
+
+              {selectedQuickTool === 'rental-calculator' ? (
+                <LongTermRentalCalculator />
+              ) : selectedQuickTool === 'free-form-tool' ? (
+                <FreeFormTool />
+              ) : (
+                <form onSubmit={handleQuickToolSubmit} className="space-y-6">
+                  <fieldset disabled={isCalculatingQuick} className="space-y-6">
+                    {/* Property Address */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Property Address
+                      </label>
+                      <AddressAutocomplete
+                        value={quickToolAddress}
+                        onChange={setQuickToolAddress}
+                        placeholder="e.g., 123 Main St, Wilmington, NC 28401"
+                        required
+                        className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                      />
+                    </div>
+
+                    {/* Property Type */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Property Type
+                      </label>
+                      <div className="relative">
+                        <select
+                          value={quickToolPropertyType}
+                          onChange={(e) => setQuickToolPropertyType(e.target.value)}
+                          className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                          required
+                        >
+                          <option value="">Select property type</option>
+                          <option value="Single Family">Single Family</option>
+                          <option value="Condo">Condo</option>
+                          <option value="Townhouse">Townhouse</option>
+                          <option value="Manufactured">Manufactured</option>
+                          <option value="Multi-Family">Multi-Family (2-4 units)</option>
+                          <option value="Apartment">Apartment (5+ units)</option>
+                        </select>
+                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                      </div>
+                    </div>
+
+                    {/* Radius */}
+                    <div>
+                      <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Radius
+                        <div className="group relative">
+                          <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                          <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block w-64 p-2 bg-gray-900 text-white text-xs rounded shadow-lg z-10">
+                            Select the maximum distance to find comparable properties
+                          </div>
+                        </div>
+                      </label>
+                      <div className="relative">
+                        <select
+                          value={quickToolRadius}
+                          onChange={(e) => setQuickToolRadius(e.target.value)}
+                          className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                          required
+                        >
+                          <option value="0.50">0.50 mi</option>
+                          <option value="0.75">0.75 mi</option>
+                          <option value="1.00">1.00 mi</option>
+                          <option value="1.50">1.50 mi</option>
+                          <option value="2.00">2.00 mi</option>
+                          <option value="3.00">3.00 mi</option>
+                          <option value="5.00">5.00 mi</option>
+                          <option value="10.0">10.0 mi</option>
+                        </select>
+                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                      </div>
+                    </div>
+
+                    {/* Bedrooms */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Bedrooms <span className="text-xs text-gray-500 dark:text-gray-400">(per unit)</span>
+                      </label>
+                      <div className="relative">
+                        <select
+                          value={quickToolBedrooms}
+                          onChange={(e) => setQuickToolBedrooms(e.target.value)}
+                          className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                          required
+                        >
+                          <option value="">Select bedrooms</option>
+                          <option value="0">Studio</option>
+                          <option value="1">1</option>
+                          <option value="2">2</option>
+                          <option value="3">3</option>
+                          <option value="4">4</option>
+                          <option value="5">5</option>
+                          <option value="6">6+</option>
+                        </select>
+                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                      </div>
+                    </div>
+
+                    {/* Bathrooms */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Bathrooms <span className="text-xs text-gray-500 dark:text-gray-400">(per unit)</span>
+                      </label>
+                      <div className="relative">
+                        <select
+                          value={quickToolBathrooms}
+                          onChange={(e) => setQuickToolBathrooms(e.target.value)}
+                          className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                          required
+                        >
+                          <option value="">Select bathrooms</option>
+                          <option value="1">1</option>
+                          <option value="1.5">1.5</option>
+                          <option value="2">2</option>
+                          <option value="2.5">2.5</option>
+                          <option value="3">3</option>
+                          <option value="3.5">3.5</option>
+                          <option value="4">4</option>
+                          <option value="4.5">4.5</option>
+                          <option value="5">5+</option>
+                        </select>
+                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                      </div>
+                    </div>
+
+                    {/* Square Footage */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Square Footage <span className="text-xs text-gray-500 dark:text-gray-400">(per unit)</span>
+                      </label>
+                      <input
+                        type="number"
+                        value={quickToolSqft}
+                        onChange={(e) => setQuickToolSqft(e.target.value)}
+                        placeholder="e.g., 2000"
+                        min="1"
+                        className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                      />
+                    </div>
+
+                    {/* Number of Units - for Value Estimator with Multi-Family/Apartment */}
+                    {selectedQuickTool === 'value-estimator' && (quickToolPropertyType === 'Multi-Family' || quickToolPropertyType === 'Apartment') && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                          Number of Units
+                        </label>
+                        <div className="relative">
+                          <select
+                            value={quickToolNumberOfUnits}
+                            onChange={(e) => setQuickToolNumberOfUnits(e.target.value)}
+                            className="w-full appearance-none px-4 py-3 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                            required
+                          >
+                            <option value="">Select number of units</option>
+                            {quickToolPropertyType === 'Multi-Family' ? (
+                              <>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                              </>
+                            ) : (
+                              Array.from({ length: 96 }, (_, i) => i + 5).map((num) => (
+                                <option key={num} value={num.toString()}>
+                                  {num === 100 ? '100+' : num}
+                                </option>
+                              ))
+                            )}
+                          </select>
+                          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                        </div>
+                      </div>
+                    )}
+                  </fieldset>
+
+                  {/* Submit Button */}
+                  <div className="flex gap-3 pt-4">
+                    <button
+                      type="button"
+                      onClick={resetQuickToolForm}
+                      disabled={isCalculatingQuick}
+                      className="px-6 py-3 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isCalculatingQuick}
+                      className="flex-1 bg-brand-500 hover:bg-brand-600 text-white px-6 py-3 rounded-lg transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      {isCalculatingQuick ? (
+                        <>
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          Calculating...
+                        </>
+                      ) : (
+                        'Calculate Estimate'
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          )}
         </div>
-      )}
+
+        {/* Pro Tools Section - Only show when no Quick Tool is selected */}
+        {!selectedQuickTool && (
+          <div>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="h-1 w-12 bg-brand-500 rounded"></div>
+              <h2 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">Pro Tools</h2>
+            </div>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+              Generate detailed, downloadable market research reports for any location
+            </p>
+            <MarketReports userId={userId} hideTitle={true} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
-
-

@@ -1,10 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 interface AddressAutocompleteProps {
   value: string;
-  onChange: (address: string) => void;
-  onPlaceSelected?: (place: google.maps.places.PlaceResult) => void;
-  onAddressValidated?: (isValid: boolean) => void;
+  onChange: (value: string) => void;
   placeholder?: string;
   required?: boolean;
   className?: string;
@@ -13,131 +11,140 @@ interface AddressAutocompleteProps {
 export default function AddressAutocomplete({
   value,
   onChange,
-  onPlaceSelected,
-  onAddressValidated,
-  placeholder = 'Enter property address',
-  required = false,
-  className = '',
+  placeholder,
+  required,
+  className
 }: AddressAutocompleteProps) {
+  const [inputValue, setInputValue] = useState(value);
+  const [showError, setShowError] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
-  const onChangeRef = useRef(onChange);
-  const onPlaceSelectedRef = useRef(onPlaceSelected);
-  const onAddressValidatedRef = useRef(onAddressValidated);
-
-  // Keep refs up to date
-  useEffect(() => {
-    onChangeRef.current = onChange;
-    onPlaceSelectedRef.current = onPlaceSelected;
-    onAddressValidatedRef.current = onAddressValidated;
-  }, [onChange, onPlaceSelected, onAddressValidated]);
+  const validSelectionRef = useRef<boolean>(false);
+  const lastValidValueRef = useRef<string>(value);
+  const blurTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+    setInputValue(value);
+    lastValidValueRef.current = value;
+    validSelectionRef.current = true;
+    setShowError(false);
+  }, [value]);
 
-    if (!apiKey) {
-      console.error('Google Maps API key is missing');
-      return;
-    }
+  useEffect(() => {
+    const initAutocomplete = async () => {
+      if (!inputRef.current) return;
 
-    const loadGoogleMaps = async () => {
       try {
+        // Load the Google Maps script if not already loaded
         if (!window.google?.maps) {
-          const existingScript = document.querySelector('script[src*="maps.googleapis.com"]');
-
-          if (!existingScript) {
-            const script = document.createElement('script');
-            script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
-            script.async = true;
-            script.defer = true;
-
+          const script = document.createElement('script');
+          script.src = `https://maps.googleapis.com/maps/api/js?key=${import.meta.env.VITE_GOOGLE_MAPS_API_KEY}&libraries=places`;
+          script.async = true;
+          script.defer = true;
+          
+          await new Promise<void>((resolve, reject) => {
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error('Failed to load Google Maps script'));
             document.head.appendChild(script);
-
-            await new Promise<void>((resolve, reject) => {
-              script.onload = () => {
-                const checkGoogleMaps = setInterval(() => {
-                  if (window.google?.maps?.places) {
-                    clearInterval(checkGoogleMaps);
-                    resolve();
-                  }
-                }, 100);
-
-                setTimeout(() => {
-                  clearInterval(checkGoogleMaps);
-                  reject(new Error('Google Maps failed to load in time'));
-                }, 10000);
-              };
-              script.onerror = reject;
-            });
-          } else {
-            await new Promise<void>((resolve) => {
-              const checkGoogleMaps = setInterval(() => {
-                if (window.google?.maps?.places) {
-                  clearInterval(checkGoogleMaps);
-                  resolve();
-                }
-              }, 100);
-            });
-          }
+          });
         }
 
-        if (!inputRef.current) return;
+        // Configure autocomplete for full addresses
+        autocompleteRef.current = new google.maps.places.Autocomplete(
+          inputRef.current,
+          {
+            componentRestrictions: { country: 'us' },
+            fields: ['formatted_address', 'address_components'],
+            types: ['address']
+          }
+        );
 
-        autocompleteRef.current = new google.maps.places.Autocomplete(inputRef.current, {
-          types: ['address'],
-          componentRestrictions: { country: 'us' },
-          fields: ['formatted_address', 'address_components', 'geometry'],
-        });
-
+        // Listen for place selection
         autocompleteRef.current.addListener('place_changed', () => {
           const place = autocompleteRef.current?.getPlace();
-
+          
           if (place?.formatted_address) {
-            // Remove ", USA" from the end of the address
-            let cleanedAddress = place.formatted_address.replace(/, USA$/, '');
-            
-            // Update parent state using refs to avoid stale closures
-            onChangeRef.current(cleanedAddress);
-            if (onPlaceSelectedRef.current) {
-              onPlaceSelectedRef.current(place);
-            }
-            // Notify parent that a valid address was selected
-            if (onAddressValidatedRef.current) {
-              onAddressValidatedRef.current(true);
-            }
+            setInputValue(place.formatted_address);
+            onChange(place.formatted_address);
+            validSelectionRef.current = true;
+            lastValidValueRef.current = place.formatted_address;
+            setShowError(false);
           }
         });
       } catch (error) {
-        console.error('Error loading Google Maps:', error);
+        console.error('Error loading Google Places:', error);
       }
     };
 
-    loadGoogleMaps();
+    initAutocomplete();
 
+    // Cleanup
     return () => {
       if (autocompleteRef.current) {
         google.maps.event.clearInstanceListeners(autocompleteRef.current);
       }
+      if (blurTimeoutRef.current) {
+        clearTimeout(blurTimeoutRef.current);
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [onChange]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newValue = e.target.value;
+    setInputValue(newValue);
+    // Mark as invalid selection when user types manually
+    validSelectionRef.current = false;
+    // Hide error while typing
+    setShowError(false);
+  };
+
+  const handleBlur = () => {
+    // Clear any existing timeout
+    if (blurTimeoutRef.current) {
+      clearTimeout(blurTimeoutRef.current);
+    }
+
+    // Delay validation to allow Google Places selection to complete
+    blurTimeoutRef.current = setTimeout(() => {
+      // If user typed but didn't select from autocomplete, revert to last valid value
+      if (!validSelectionRef.current && inputValue.trim() !== '') {
+        setShowError(true);
+        setInputValue(lastValidValueRef.current);
+        // If there was no previous valid value, clear the field
+        if (!lastValidValueRef.current) {
+          onChange('');
+        }
+      }
+    }, 200); // 200ms delay allows place_changed to fire first
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Prevent form submission if Enter is pressed without a valid selection
+    if (e.key === 'Enter' && !validSelectionRef.current && inputValue.trim() !== '') {
+      e.preventDefault();
+      setShowError(true);
+      setInputValue(lastValidValueRef.current);
+    }
+  };
 
   return (
-    <input
-      ref={inputRef}
-      type="text"
-      value={value}
-      onChange={(e) => {
-        onChangeRef.current(e.target.value);
-        // When user manually types, mark address as not validated
-        if (onAddressValidatedRef.current) {
-          onAddressValidatedRef.current(false);
-        }
-      }}
-      placeholder={placeholder}
-      required={required}
-      className={className}
-      autoComplete="off"
-    />
+    <div className="relative">
+      <input
+        ref={inputRef}
+        type="text"
+        value={inputValue}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        required={required}
+        className={`${className} ${showError ? '!border-red-500 dark:!border-red-500' : ''}`}
+      />
+      {showError && (
+        <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+          Please select an address from the dropdown suggestions
+        </p>
+      )}
+    </div>
   );
 }

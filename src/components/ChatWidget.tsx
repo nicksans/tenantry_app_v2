@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { X, Send, Loader2, Paperclip, File, RotateCcw } from 'lucide-react';
+import { X, Send, Loader2, Paperclip, File, RotateCcw, Bot } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 interface ChatWidgetProps {
@@ -29,7 +29,7 @@ interface Unit {
 export default function ChatWidget({ userId }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Array<{ text: string; sender: 'user' | 'bot' }>>([
-    { text: "Hi! I'm Emma, your rental property assistant. Ask me anything about your properties!", sender: 'bot' }
+    { text: "Hi! I'm Tenantry Support, your rental property assistant. Ask me anything about your properties!", sender: 'bot' }
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -84,7 +84,7 @@ export default function ChatWidget({ userId }: ChatWidgetProps) {
     console.log('JSON body string:', jsonBody);
 
     try {
-      const response = await fetch('https://tenantry.app.n8n.cloud/webhook-test/chat', {
+      const response = await fetch('https://tenantry.app.n8n.cloud/webhook/6114eecc-0772-4a74-a4fd-de5a92b839fa', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -321,7 +321,7 @@ export default function ChatWidget({ userId }: ChatWidgetProps) {
         console.log('Association Type:', associationType);
         console.log('Property ID:', selectedPropertyId);
         
-        response = await fetch('https://tenantry.app.n8n.cloud/webhook-test/chat', {
+        response = await fetch('https://tenantry.app.n8n.cloud/webhook/6114eecc-0772-4a74-a4fd-de5a92b839fa', {
           method: 'POST',
           body: formData,
         });
@@ -335,7 +335,7 @@ export default function ChatWidget({ userId }: ChatWidgetProps) {
         console.log('Sending message with payload:', payload);
         console.log('JSON body string:', jsonBody);
         
-        response = await fetch('https://tenantry.app.n8n.cloud/webhook-test/chat', {
+        response = await fetch('https://tenantry.app.n8n.cloud/webhook/6114eecc-0772-4a74-a4fd-de5a92b839fa', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -407,7 +407,7 @@ export default function ChatWidget({ userId }: ChatWidgetProps) {
   const startNewConversation = () => {
     // Reset the chat to initial state
     setMessages([
-      { text: "Hi! I'm Emma, your rental property assistant. Ask me anything about your properties!", sender: 'bot' }
+      { text: "Hi! I'm Tenantry Support, your rental property assistant. Ask me anything about your properties!", sender: 'bot' }
     ]);
     setShowSuggestions(true);
     setInputValue('');
@@ -426,46 +426,16 @@ export default function ChatWidget({ userId }: ChatWidgetProps) {
 
   return (
     <>
-      <style>{`
-        @keyframes subtle-pulse {
-          0% {
-            transform: translate(-50%, -50%) scale(1);
-            opacity: 0.8;
-          }
-          37.5% {
-            transform: translate(-50%, -50%) scale(1.5);
-            opacity: 0;
-          }
-          100% {
-            transform: translate(-50%, -50%) scale(1.5);
-            opacity: 0;
-          }
-        }
-      `}</style>
-      
       {/* Chat Button */}
       {!isOpen && (
         <div className="fixed bottom-6 right-6 z-50">
-          {/* Subtle pulsing rings */}
-          <div 
-            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-20 rounded-full border-2"
-            style={{
-              animation: 'subtle-pulse 3s linear infinite',
-              backgroundColor: '#7A3EB1' + '66',
-              borderColor: '#7A3EB1' + 'E6',
-            }}
-          ></div>
-          {/* Button with Emma image */}
+          {/* Button with bot icon */}
           <button
             onClick={() => setIsOpen(true)}
-            className="relative w-20 h-20 bg-white hover:bg-gray-50 rounded-full shadow-lg flex items-center justify-center transition-all hover:scale-110 overflow-hidden border-2"
-            style={{ borderColor: '#7A3EB1' }}
+            className="relative w-14 h-14 rounded-full shadow-lg flex items-center justify-center transition-all hover:scale-110 text-white"
+            style={{ backgroundColor: '#0D98BA' }}
           >
-            <img 
-              src="/Emma_Tenantry.png" 
-              alt="Chat with Emma" 
-              className="w-full h-full object-cover rounded-full"
-            />
+            <Bot className="w-7 h-7" />
           </button>
         </div>
       )}
@@ -474,12 +444,14 @@ export default function ChatWidget({ userId }: ChatWidgetProps) {
       {isOpen && (
         <div className="fixed bottom-6 right-6 w-[450px] h-[600px] bg-white dark:bg-gray-800 rounded-lg shadow-2xl flex flex-col z-50 border border-gray-200 dark:border-gray-700">
           {/* Header */}
-          <div className="text-white p-4 rounded-t-lg flex items-center justify-between" style={{ background: 'linear-gradient(135deg, #0D98BA, #7928CA)' }}>
+          <div className="text-white p-4 rounded-t-lg flex items-center justify-between" style={{ backgroundColor: '#0D98BA' }}>
             <div className="flex items-center gap-3">
-              <img src="/Emma_Tenantry.png" alt="Emma" className="w-10 h-10 rounded-full" />
+              <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center">
+                <Bot className="w-6 h-6" style={{ color: '#0D98BA' }} />
+              </div>
               <div>
-                <h3 className="font-semibold">Emma</h3>
-                <p className="text-xs text-white/80">AI Property Assistant</p>
+                <h3 className="font-semibold">Tenantry</h3>
+                <p className="text-xs text-white/80">AI Support Assistant</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -507,7 +479,9 @@ export default function ChatWidget({ userId }: ChatWidgetProps) {
                   className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   {message.sender === 'bot' && (
-                    <img src="/Emma_Tenantry.png" alt="Emma" className="w-8 h-8 rounded-full mr-2 flex-shrink-0" />
+                    <div className="w-8 h-8 rounded-full mr-2 flex-shrink-0 flex items-center justify-center" style={{ backgroundColor: '#0D98BA' }}>
+                      <Bot className="w-5 h-5 text-white" />
+                    </div>
                   )}
                   <div
                     className={`max-w-[80%] rounded-lg p-3 ${
@@ -539,14 +513,11 @@ export default function ChatWidget({ userId }: ChatWidgetProps) {
             ))}
             {isLoading && (
               <div className="flex justify-start">
-                <img src="/Emma_Tenantry.png" alt="Emma" className="w-8 h-8 rounded-full mr-2 flex-shrink-0" />
+                <div className="w-8 h-8 rounded-full mr-2 flex-shrink-0 flex items-center justify-center" style={{ backgroundColor: '#0D98BA' }}>
+                  <Bot className="w-5 h-5 text-white" />
+                </div>
                 <div className="bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-600 rounded-lg p-3">
-                  <Loader2 className="w-5 h-5 animate-spin" style={{ 
-                    background: 'linear-gradient(135deg, #0D98BA, #7928CA)',
-                    WebkitBackgroundClip: 'text',
-                    WebkitTextFillColor: 'transparent',
-                    backgroundClip: 'text'
-                  }} />
+                  <Loader2 className="w-5 h-5 animate-spin" style={{ color: '#0D98BA' }} />
                 </div>
               </div>
             )}
@@ -580,7 +551,7 @@ export default function ChatWidget({ userId }: ChatWidgetProps) {
                   outline: 'none',
                 }}
                 onFocus={(e) => {
-                  e.target.style.boxShadow = '0 0 0 2px #0D98BA, 0 0 0 4px #7928CA40';
+                  e.target.style.boxShadow = '0 0 0 2px #0D98BA';
                 }}
                 onBlur={(e) => {
                   e.target.style.boxShadow = 'none';
@@ -593,24 +564,18 @@ export default function ChatWidget({ userId }: ChatWidgetProps) {
                 disabled={(!inputValue.trim() && !attachedFile) || isLoading}
                 className="px-4 py-2 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 style={{
-                  background: 'linear-gradient(135deg, #0D98BA, #7928CA)',
+                  backgroundColor: '#0D98BA',
                 }}
               >
                 <Send className="w-4 h-4" />
               </button>
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 text-center">
-              Call or text me at <a href="tel:8563936225" className="hover:underline" style={{ 
-                background: 'linear-gradient(135deg, #0D98BA, #7928CA)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text'
-              }}>(856) 393-6225</a>, or email me at <a href="mailto:emma@tenantry.ai" className="hover:underline" style={{ 
-                background: 'linear-gradient(135deg, #0D98BA, #7928CA)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text'
-              }}>emma@tenantry.ai</a>.
+              Call or text us at <a href="tel:8563936225" className="hover:underline" style={{ 
+                color: '#0D98BA'
+              }}>(856) 393-6225</a>, or email us at <a href="mailto:support@tenantry.ai" className="hover:underline" style={{ 
+                color: '#0D98BA'
+              }}>support@tenantry.ai</a>.
             </p>
           </div>
         </div>
