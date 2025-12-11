@@ -54,6 +54,9 @@ export default function LocationAutocomplete({
         // Clear existing autocomplete instance if it exists
         if (autocompleteRef.current) {
           google.maps.event.clearInstanceListeners(autocompleteRef.current);
+          // Remove the pac-container (Google's autocomplete dropdown) from the DOM
+          const pacContainers = document.querySelectorAll('.pac-container');
+          pacContainers.forEach(container => container.remove());
           autocompleteRef.current = null;
         }
 
@@ -111,7 +114,11 @@ export default function LocationAutocomplete({
               );
 
               if (stateComponent) {
-                const stateName = stateComponent.long_name; // e.g., "North Carolina"
+                let stateName = stateComponent.long_name; // e.g., "North Carolina"
+                // Add "State" to New York to distinguish it from New York City
+                if (stateName === 'New York') {
+                  stateName = 'New York State';
+                }
                 setInputValue(stateName);
                 onChange(stateName);
                 validSelectionRef.current = true;
@@ -159,6 +166,9 @@ export default function LocationAutocomplete({
     return () => {
       if (autocompleteRef.current) {
         google.maps.event.clearInstanceListeners(autocompleteRef.current);
+        // Clean up any remaining pac-containers when component unmounts
+        const pacContainers = document.querySelectorAll('.pac-container');
+        pacContainers.forEach(container => container.remove());
       }
       if (blurTimeoutRef.current) {
         clearTimeout(blurTimeoutRef.current);

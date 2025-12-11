@@ -1,12 +1,12 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Calculator, ChevronDown, Loader2, Info, DollarSign, Building2, ArrowLeft, TrendingUp } from 'lucide-react';
 import AddressAutocomplete from './AddressAutocomplete';
 import MarketReports from './MarketReports';
 import LongTermRentalCalculator from './LongTermRentalCalculator';
-import FreeFormTool from './FreeFormTool';
+import TimelineCompare from './TimelineCompare';
 
-type QuickToolType = 'rent-estimator' | 'value-estimator' | 'rental-calculator' | 'free-form-tool' | null;
+type QuickToolType = 'rent-estimator' | 'value-estimator' | 'rental-calculator' | 'timeline-compare' | null;
 
 interface ToolsProps {
   userId?: string;
@@ -14,6 +14,7 @@ interface ToolsProps {
 
 export default function Tools({ userId }: ToolsProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   
   // Quick Tools State
   const [selectedQuickTool, setSelectedQuickTool] = useState<QuickToolType>(null);
@@ -26,10 +27,20 @@ export default function Tools({ userId }: ToolsProps) {
   const [quickToolSqft, setQuickToolSqft] = useState('');
   const [isCalculatingQuick, setIsCalculatingQuick] = useState(false);
 
+  // Reset tool selection when navigating from sidebar
+  useEffect(() => {
+    const state = location.state as { resetTool?: boolean } | null;
+    if (state?.resetTool) {
+      setSelectedQuickTool(null);
+      // Clear the state so it doesn't reset again on other navigations
+      window.history.replaceState({}, document.title);
+    }
+  }, [location]);
+
   const quickToolOptions = [
     {
-      id: 'free-form-tool' as QuickToolType,
-      title: 'Free Form Tool',
+      id: 'timeline-compare' as QuickToolType,
+      title: 'Timeline Compare',
       description: 'Compare economic indicators, population trends, and rental market data across multiple cities or zip codes.',
       icon: TrendingUp
     },
@@ -93,7 +104,7 @@ export default function Tools({ userId }: ToolsProps) {
   const handleQuickToolSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (selectedQuickTool === 'rental-calculator' || selectedQuickTool === 'free-form-tool') {
+    if (selectedQuickTool === 'rental-calculator' || selectedQuickTool === 'timeline-compare') {
       return;
     }
 
@@ -245,8 +256,8 @@ export default function Tools({ userId }: ToolsProps) {
 
               {selectedQuickTool === 'rental-calculator' ? (
                 <LongTermRentalCalculator />
-              ) : selectedQuickTool === 'free-form-tool' ? (
-                <FreeFormTool />
+              ) : selectedQuickTool === 'timeline-compare' ? (
+                <TimelineCompare />
               ) : (
                 <form onSubmit={handleQuickToolSubmit} className="space-y-6">
                   <fieldset disabled={isCalculatingQuick} className="space-y-6">

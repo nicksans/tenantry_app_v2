@@ -74,7 +74,7 @@ export default function AppLayout({ user }: AppLayoutProps) {
 
           {/* Analysis Tools */}
           <button
-            onClick={() => navigate('/app/tools')}
+            onClick={() => navigate('/app/tools', { state: { resetTool: true } })}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors ${
               isActive('/app/tools')
                 ? 'bg-brand-500 text-white'

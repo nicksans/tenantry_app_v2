@@ -38,7 +38,7 @@ I've successfully integrated Google Places Autocomplete into your Tenantry app w
 
 ### API Key Location
 - **File**: `.env`
-- **Variable**: `VITE_GOOGLE_MAPS_API_KEY=AIzaSyDFTM6_Xs9dgOj2CtDs5AlGaN55DIyiE_g`
+- **Variable**: ``
 
 ### Where It's Used
 1. **Rental Market Finder** - "Nearby city" field
