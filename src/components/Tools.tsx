@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Calculator, ChevronDown, Loader2, Info, DollarSign, Building2, ArrowLeft, TrendingUp } from 'lucide-react';
+import { Calculator, ChevronDown, Loader2, Info, DollarSign, Building2, ArrowLeft, LineChart } from 'lucide-react';
 import AddressAutocomplete from './AddressAutocomplete';
 import MarketReports from './MarketReports';
 import LongTermRentalCalculator from './LongTermRentalCalculator';
 import TimelineCompare from './TimelineCompare';
+import { supabase } from '../lib/supabase';
 
 type QuickToolType = 'rent-estimator' | 'value-estimator' | 'rental-calculator' | 'timeline-compare' | null;
 
@@ -40,9 +41,9 @@ export default function Tools({ userId }: ToolsProps) {
   const quickToolOptions = [
     {
       id: 'timeline-compare' as QuickToolType,
-      title: 'Timeline Compare',
+      title: 'Timeline View',
       description: 'Compare economic indicators, population trends, and rental market data across multiple cities or zip codes.',
-      icon: TrendingUp
+      icon: LineChart
     },
     {
       id: 'rent-estimator' as QuickToolType,
@@ -110,6 +111,75 @@ export default function Tools({ userId }: ToolsProps) {
 
     setIsCalculatingQuick(true);
     
+    const isRentEstimator = selectedQuickTool === 'rent-estimator';
+    
+    // Prepare search criteria
+    const searchCriteria = {
+      addressLine1: quickToolAddress.split(',')[0]?.trim(),
+      bedrooms: quickToolBedrooms !== '' ? parseInt(quickToolBedrooms) : null,
+      bathrooms: quickToolBathrooms !== '' ? parseFloat(quickToolBathrooms) : null,
+      squareFootage: quickToolSqft !== '' ? parseInt(quickToolSqft) : null,
+      radius: parseFloat(quickToolRadius),
+    };
+
+    console.log('🔍 Checking Supabase for cached estimate...');
+    console.log('Search criteria:', searchCriteria);
+
+    try {
+      // Check Supabase for existing estimate
+      const tableName = isRentEstimator ? 'rent_estimates' : 'property_estimates';
+      const idColumn = isRentEstimator ? 'rent_estimate_id' : 'property_estimate_id';
+      
+      let query = supabase
+        .from(tableName)
+        .select(idColumn)
+        .ilike('addressLine1', `%${searchCriteria.addressLine1}%`);
+
+      // Add exact matching for bedrooms, bathrooms, square footage, and radius
+      if (searchCriteria.bedrooms !== null) {
+        query = query.eq('bedrooms', searchCriteria.bedrooms);
+      }
+      if (searchCriteria.bathrooms !== null) {
+        query = query.eq('bathrooms', searchCriteria.bathrooms);
+      }
+      if (searchCriteria.squareFootage !== null) {
+        query = query.eq('squareFootage', searchCriteria.squareFootage);
+      }
+      // Match radius exactly
+      query = query.eq('radius', searchCriteria.radius);
+
+      // Get the most recent estimate
+      query = query.order('created_at', { ascending: false }).limit(1);
+
+      const { data: cachedEstimate, error: queryError } = await query;
+
+      if (queryError) {
+        console.error('❌ Supabase query error:', queryError);
+        // Continue to webhook on error
+      } else if (cachedEstimate && cachedEstimate.length > 0) {
+        const estimateId = isRentEstimator 
+          ? (cachedEstimate[0] as any).rent_estimate_id 
+          : (cachedEstimate[0] as any).property_estimate_id;
+        console.log('✅ Found cached estimate:', estimateId);
+        
+        // Navigate to results with cached estimate
+        const resultsPath = isRentEstimator 
+          ? `/app/tools/results/${estimateId}`
+          : `/app/tools/value-results/${estimateId}`;
+        navigate(resultsPath);
+        setIsCalculatingQuick(false);
+        return;
+      } else {
+        console.log('⚠️ No cached estimate found, calling webhook...');
+      }
+    } catch (cacheError) {
+      console.error('❌ Error checking cache:', cacheError);
+      // Continue to webhook on error
+    }
+
+    // If no cached data, proceed with webhook call
+    console.log('📡 Calling webhook for new estimate...');
+    
     const estimateData = {
       owner_id: userId,
       address: quickToolAddress,
@@ -120,7 +190,6 @@ export default function Tools({ userId }: ToolsProps) {
       sqft: quickToolSqft !== '' ? parseInt(quickToolSqft) : undefined,
     };
 
-    const isRentEstimator = selectedQuickTool === 'rent-estimator';
     const webhookUrl = isRentEstimator 
       ? 'https://tenantry.app.n8n.cloud/webhook/rent-estimator'
       : 'https://tenantry.app.n8n.cloud/webhook/value-estimator';

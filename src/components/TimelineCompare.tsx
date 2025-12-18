@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { X, ChevronDown, TrendingUp, Loader2, ChevronUp } from 'lucide-react';
 import LocationAutocomplete from './LocationAutocomplete';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { supabase } from '../lib/supabase';
 
 interface Variable {
   id: string;
@@ -37,7 +38,10 @@ export default function TimelineCompare() {
   const [showResults, setShowResults] = useState(false);
   const [locationsWithNoData, setLocationsWithNoData] = useState<string[]>([]);
   const [aiSummary, setAiSummary] = useState<string>('');
+  const [displayedSummary, setDisplayedSummary] = useState<string>('');
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const [timelineStart, setTimelineStart] = useState<number>(0); // 0-100 percentage
+  const [timelineEnd, setTimelineEnd] = useState<number>(100); // 0-100 percentage
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   
@@ -63,7 +67,7 @@ export default function TimelineCompare() {
   // Property type options
   const propertyTypes = [
     'All',
-    'Single-Family',
+    'Single Family',
     'Townhouse',
     'Condo',
     'Multi-Family (2-4 units)',
@@ -138,11 +142,15 @@ export default function TimelineCompare() {
     {
       id: 'environment',
       name: 'Environment',
-      count: 3,
+      count: 7,
       variables: [
         { id: 'air_quality', name: 'Air Quality Index' },
         { id: 'walkability', name: 'Walkability Score' },
         { id: 'green_space', name: 'Green Space Percentage' },
+        { id: 'Min_Temperature', name: 'Min Temperature' },
+        { id: 'Max_Temperature', name: 'Max Temperature' },
+        { id: 'Mean_Snowfall', name: 'Snowfall' },
+        { id: 'Mean_Temperature', name: 'Temperature' },
       ]
     },
     {
@@ -222,88 +230,170 @@ export default function TimelineCompare() {
       const isSaleMarketVariable = saleMarketVariables.some(v => v.id === selectedVariable.id);
       const isRentcastVariable = isRentalMarketVariable || isSaleMarketVariable;
       
-      // Prepare the request body
-      const requestBody: any = {
-        locationType: locationType,
-        locations: selectedLocations.map(loc => loc.value),
-        variable: {
-          id: selectedVariable.id,
-          name: selectedVariable.name,
-          description: selectedVariable.description
-        }
-      };
+      let combinedData: any[] = [];
+      let locationsToFetch: string[] = [];
 
-      // Add rentcast-specific data if it's a paid variable and location type is Zip
+      // If this is a RentCast variable, check Supabase for each location individually
       if (isRentcastVariable && locationType === 'zip') {
-        requestBody.source = 'rentcast';
+        console.log('🔍 Checking Supabase for cached RentCast data for each location...');
         
-        // Determine if this is rental or sale market
+        // Determine current filters
         const isRentalMarket = isRentalMarketVariable;
-        
-        // Add market type to the request
-        requestBody.marketType = isRentalMarket ? 'Rental' : 'Sale';
+        let currentPropertyType: string;
+        let currentBedrooms: string;
         
         if (isRentalMarket) {
-          // Only send the filter that's currently selected
-          if (rentalFilterType === 'propertyType') {
-            requestBody.propertyType = rentalPropertyType;
-          } else {
-            if (rentalBedrooms !== null) {
-              requestBody.bedrooms = rentalBedrooms;
-            }
-          }
+          currentPropertyType = rentalFilterType === 'propertyType' ? rentalPropertyType : 'All';
+          currentBedrooms = rentalFilterType === 'bedrooms' && rentalBedrooms !== null ? rentalBedrooms.toString() : 'All';
         } else {
-          // Only send the filter that's currently selected
-          if (saleFilterType === 'propertyType') {
-            requestBody.propertyType = salePropertyType;
+          currentPropertyType = saleFilterType === 'propertyType' ? salePropertyType : 'All';
+          currentBedrooms = saleFilterType === 'bedrooms' && saleBedrooms !== null ? saleBedrooms.toString() : 'All';
+        }
+
+        console.log('🔎 Looking for data with filters:', {
+          metric: selectedVariable.id,
+          propertyType: currentPropertyType,
+          bedrooms: currentBedrooms,
+          zipCodes: selectedLocations.map(loc => loc.value)
+        });
+
+        // Check each location individually
+        for (const location of selectedLocations) {
+          const zipCode = location.value;
+          
+          const { data: supabaseData, error } = await supabase
+            .from('rentcast_timeline_results')
+            .select('*')
+            .eq('zipCode', zipCode)
+            .eq('metric', selectedVariable.id)
+            .eq('propertyType', currentPropertyType)
+            .eq('bedrooms', currentBedrooms)
+            .order('date', { ascending: true });
+
+          if (error) {
+            console.error(`❌ Supabase query error for ${zipCode}:`, error);
+            locationsToFetch.push(zipCode);
+          } else if (supabaseData && supabaseData.length > 0) {
+            console.log(`✅ Found ${supabaseData.length} cached records for ${zipCode}`);
+            
+            // Transform Supabase data to match API format (already in correct format)
+            const transformedData = supabaseData.map(row => ({
+              zipCode: row.zipCode,
+              series: row.series,
+              periodKey: row.periodKey,
+              date: row.date,
+              metric: row.metric,
+              propertyType: row.propertyType,
+              bedrooms: row.bedrooms,
+              value: parseFloat(row.value)
+            }));
+            
+            // Add to combined data
+            combinedData = [...combinedData, ...transformedData];
           } else {
-            if (saleBedrooms !== null) {
-              requestBody.bedrooms = saleBedrooms;
+            console.log(`⚠️ No cached data found for ${zipCode}, will fetch from API`);
+            locationsToFetch.push(zipCode);
+          }
+        }
+
+        console.log(`📊 Summary: ${selectedLocations.length - locationsToFetch.length} location(s) from cache, ${locationsToFetch.length} to fetch from API`);
+      } else {
+        // For non-RentCast variables, fetch all locations via webhook
+        locationsToFetch = selectedLocations.map(loc => loc.value);
+      }
+
+      // If we have locations to fetch, call the webhook
+      if (locationsToFetch.length > 0) {
+        console.log(`📡 Calling n8n webhook for ${locationsToFetch.length} location(s):`, locationsToFetch);
+        
+        // Prepare the request body
+        const requestBody: any = {
+          locationType: locationType,
+          locations: locationsToFetch,
+          variable: {
+            id: selectedVariable.id,
+            name: selectedVariable.name,
+            description: selectedVariable.description
+          }
+        };
+
+        // Add rentcast-specific data if it's a paid variable and location type is Zip
+        if (isRentcastVariable && locationType === 'zip') {
+          requestBody.source = 'rentcast';
+          
+          // Determine if this is rental or sale market
+          const isRentalMarket = isRentalMarketVariable;
+          
+          // Add market type to the request
+          requestBody.marketType = isRentalMarket ? 'Rental' : 'Sale';
+          
+          if (isRentalMarket) {
+            // Only send the filter that's currently selected
+            if (rentalFilterType === 'propertyType') {
+              requestBody.propertyType = rentalPropertyType;
+            } else {
+              if (rentalBedrooms !== null) {
+                requestBody.bedrooms = rentalBedrooms;
+              }
+            }
+          } else {
+            // Only send the filter that's currently selected
+            if (saleFilterType === 'propertyType') {
+              requestBody.propertyType = salePropertyType;
+            } else {
+              if (saleBedrooms !== null) {
+                requestBody.bedrooms = saleBedrooms;
+              }
             }
           }
         }
+
+        const response = await fetch('https://tenantry.app.n8n.cloud/webhook/free-form', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        console.log('Response status:', response.status);
+        console.log('Response headers:', response.headers);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Error response:', errorText);
+          throw new Error(`Failed to generate report: ${response.status} ${response.statusText}`);
+        }
+
+        // Get response as text first to see what we're getting
+        const responseText = await response.text();
+        console.log('Raw response:', responseText.substring(0, 500)); // Log first 500 chars
+        
+        // Check if response is empty
+        if (!responseText || responseText.trim() === '') {
+          throw new Error('Webhook returned empty response. The n8n workflow may need to be updated to handle this request.');
+        }
+        
+        // Try to parse it as JSON
+        let webhookData;
+        try {
+          webhookData = JSON.parse(responseText);
+        } catch (jsonError) {
+          console.error('JSON parse error:', jsonError);
+          console.error('Response text:', responseText);
+          throw new Error('Invalid JSON response from webhook. Check n8n workflow configuration.');
+        }
+        
+        console.log('Webhook data received:', webhookData);
+        
+        // Combine webhook data with cached data
+        combinedData = [...combinedData, ...webhookData];
       }
 
-      const response = await fetch('https://tenantry.app.n8n.cloud/webhook/free-form', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      console.log('Response status:', response.status);
-      console.log('Response headers:', response.headers);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Error response:', errorText);
-        throw new Error(`Failed to generate report: ${response.status} ${response.statusText}`);
-      }
-
-      // Get response as text first to see what we're getting
-      const responseText = await response.text();
-      console.log('Raw response:', responseText.substring(0, 500)); // Log first 500 chars
+      console.log(`🎉 Final combined data: ${combinedData.length} total records`);
       
-      // Check if response is empty
-      if (!responseText || responseText.trim() === '') {
-        throw new Error('Webhook returned empty response. The n8n workflow may need to be updated to handle this request.');
-      }
-      
-      // Try to parse it as JSON
-      let data;
-      try {
-        data = JSON.parse(responseText);
-      } catch (jsonError) {
-        console.error('JSON parse error:', jsonError);
-        console.error('Response text:', responseText);
-        throw new Error('Invalid JSON response from webhook. Check n8n workflow configuration.');
-      }
-      
-      console.log('Report generated:', data);
-      
-      // Process the data for the chart
-      const { processedData, noDataLocations } = processChartData(data);
+      // Process the combined data for the chart
+      const { processedData, noDataLocations } = processChartData(combinedData);
       setChartData(processedData);
       setLocationsWithNoData(noDataLocations);
       setShowResults(true);
@@ -324,6 +414,88 @@ export default function TimelineCompare() {
   const processChartData = (apiData: any[]): { processedData: ChartDataPoint[], noDataLocations: string[] } => {
     console.log('🔍 Processing data:', apiData);
     
+    // Check if this is RentCast data (array of flat objects with zipCode, date, value)
+    // vs Data Commons data (array of nested objects with byVariable structure)
+    const isRentCastData = apiData.length > 0 && 'zipCode' in apiData[0] && 'metric' in apiData[0];
+    
+    if (isRentCastData) {
+      console.log('📊 Processing RentCast data format');
+      return processRentCastData(apiData);
+    } else {
+      console.log('📊 Processing Data Commons data format');
+      return processDataCommonsData(apiData);
+    }
+  };
+
+  const processRentCastData = (apiData: any[]): { processedData: ChartDataPoint[], noDataLocations: string[] } => {
+    const locationDataMap: { [date: string]: ChartDataPoint } = {};
+    const locationsFound = new Set<string>();
+    const noDataLocationsSet = new Set<string>();
+    
+    // Group data by zipCode
+    const dataByZip: { [zipCode: string]: any[] } = {};
+    apiData.forEach(item => {
+      if (!dataByZip[item.zipCode]) {
+        dataByZip[item.zipCode] = [];
+      }
+      dataByZip[item.zipCode].push(item);
+    });
+    
+    console.log('📍 Zip codes in response:', Object.keys(dataByZip));
+    
+    // Process each selected location
+    selectedLocations.forEach(location => {
+      const zipCode = location.value;
+      const dataForZip = dataByZip[zipCode];
+      
+      if (!dataForZip || dataForZip.length === 0) {
+        console.log(`⚠️ No data found for zip code: ${zipCode}`);
+        noDataLocationsSet.add(zipCode);
+        return;
+      }
+      
+      console.log(`📈 Processing ${dataForZip.length} data points for ${zipCode}`);
+      locationsFound.add(zipCode);
+      
+      // Process each data point
+      dataForZip.forEach(item => {
+        // Convert ISO date to year format (YYYY) or year-month format (YYYY-MM)
+        const dateObj = new Date(item.date);
+        const year = dateObj.getFullYear();
+        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const dateKey = `${year}-${month}`; // Use YYYY-MM format for monthly data
+        
+        if (!locationDataMap[dateKey]) {
+          locationDataMap[dateKey] = { date: dateKey };
+        }
+        
+        // Add the value for this zip code
+        locationDataMap[dateKey][zipCode] = item.value;
+      });
+    });
+    
+    // Check for locations that were requested but not found in the response
+    selectedLocations.forEach(loc => {
+      if (!locationsFound.has(loc.value)) {
+        console.log(`⚠️ No data found for requested location: ${loc.value}`);
+        noDataLocationsSet.add(loc.value);
+      }
+    });
+    
+    // Convert to array and sort by date
+    const result = Object.values(locationDataMap).sort((a, b) => 
+      a.date.localeCompare(b.date)
+    );
+    
+    const noDataLocations = Array.from(noDataLocationsSet);
+    
+    console.log('✅ Processed RentCast chart data:', result);
+    console.log('⚠️ Locations with no data:', noDataLocations);
+    
+    return { processedData: result, noDataLocations };
+  };
+
+  const processDataCommonsData = (apiData: any[]): { processedData: ChartDataPoint[], noDataLocations: string[] } => {
     // Extract location data from the API response
     const locationDataMap: { [date: string]: ChartDataPoint } = {};
     const locationsFound = new Set<string>();
@@ -432,34 +604,76 @@ export default function TimelineCompare() {
         
         if (values.length === 0) return null;
         
-        const firstValue = values[0].value;
-        const lastValue = values[values.length - 1].value;
-        const percentChange = ((lastValue - firstValue) / firstValue * 100).toFixed(1);
+        const mostRecentValue = values[values.length - 1].value;
+        const mostRecentDate = values[values.length - 1].date;
+        
+        // 1. RECENT: Last 2 data points (year-over-year or month-over-month)
+        const recentIndex = Math.max(0, values.length - 2);
+        const recentValue = values[recentIndex].value;
+        const recentDate = values[recentIndex].date;
+        const recentChange = ((mostRecentValue - recentValue) / recentValue * 100).toFixed(2);
+        
+        // 2. MEDIUM-TERM: 5 data points back (5 months/years)
+        const mediumIndex = Math.max(0, values.length - 6);
+        const mediumValue = values[mediumIndex].value;
+        const mediumDate = values[mediumIndex].date;
+        const mediumChange = ((mostRecentValue - mediumValue) / mediumValue * 100).toFixed(2);
         
         return {
           location,
-          firstValue,
-          lastValue,
-          percentChange,
-          dataPoints: values.length,
-          trend: parseFloat(percentChange) > 0 ? 'up' : parseFloat(percentChange) < 0 ? 'down' : 'flat'
+          // Most recent value
+          mostRecentValue,
+          mostRecentDate,
+          // Recent trend (last 2 points)
+          recentValue,
+          recentDate,
+          recentChange,
+          // Medium-term trend (5 points back)
+          mediumValue,
+          mediumDate,
+          mediumChange,
+          dataPoints: values.length
         };
       }).filter(Boolean);
 
+      // Build filter context for the AI
+      let filterContext = '';
+      const isRentalVariable = rentalMarketVariables.some(v => v.id === selectedVariable.id);
+      const isSaleVariable = saleMarketVariables.some(v => v.id === selectedVariable.id);
+      
+      if (isRentalVariable || isSaleVariable) {
+        if (isRentalVariable) {
+          if (rentalFilterType === 'propertyType' && rentalPropertyType !== 'All') {
+            filterContext = ` for ${rentalPropertyType} properties`;
+          } else if (rentalFilterType === 'bedrooms' && rentalBedrooms !== null) {
+            filterContext = ` for ${rentalBedrooms}-bedroom properties`;
+          }
+        } else if (isSaleVariable) {
+          if (saleFilterType === 'propertyType' && salePropertyType !== 'All') {
+            filterContext = ` for ${salePropertyType} properties`;
+          } else if (saleFilterType === 'bedrooms' && saleBedrooms !== null) {
+            filterContext = ` for ${saleBedrooms}-bedroom properties`;
+          }
+        }
+      }
+
       // Create the prompt for the AI
-      const prompt = `You are analyzing a timeline chart comparing "${selectedVariable.name}" across different locations.
+      const prompt = `You are analyzing "${selectedVariable.name}"${filterContext} across time periods.
 
-Data Summary:
-${dataSummary.map(d => `- ${d?.location}: ${d?.firstValue} (${data[0].date}) → ${d?.lastValue} (${data[data.length - 1].date}), ${d?.percentChange}% change, trending ${d?.trend}`).join('\n')}
+DATA FOR EACH LOCATION (ONLY use these exact numbers):
+${dataSummary.map(d => `
+${d?.location}:
+- Recent (${d?.recentDate} → ${d?.mostRecentDate}): ${d?.recentValue} → ${d?.mostRecentValue} (${d?.recentChange}% change)
+- Medium-term (${d?.mediumDate} → ${d?.mostRecentDate}): ${d?.mediumValue} → ${d?.mostRecentValue} (${d?.mediumChange}% change)`).join('\n')}
 
-Provide exactly 2 sentences that highlight 1-2 core insights from this data. Follow these rules:
-- If the data is not available for all locations, mention that in the summary.
-- Include a mention of the most recent data point, and how it's trending.
-- Look at overall direction: Is each series trending up, down, or mostly flat?
-- Compare series: Which locations are higher or lower? Who grew faster based on the percent change?
-- Note any significant changes or patterns in the data
-- Be neutral and factual - no speculation about causes
-- Keep it concise and insightful`;
+CRITICAL RULES:
+1. Your response must be exactly 2 sentences, and must be concise and to the point.
+2. Comment on BOTH time periods: recent  data (first sentence) and medium-term trend data(second sentence)
+3. Include the totals and percentage changes for each period
+4. Use ONLY the exact numbers and dates shown above
+5. Always reference "${selectedVariable.name}" in your response${filterContext ? `\n6. Mention the filter context${filterContext}` : ''}
+6. Compare locations: Which has higher/lower percentage changes? Which is growing/declining faster?
+7. Be factual and specific`;
 
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
@@ -469,15 +683,19 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
           'HTTP-Referer': window.location.origin,
         },
         body: JSON.stringify({
-          model: 'openai/gpt-4.1-mini',
+          model: 'openai/gpt-4o-mini',
           messages: [
+            {
+              role: 'system',
+              content: 'You are a precise data analyst. You ONLY use the exact numbers and dates provided to you. You never reference data outside of what is explicitly given. Write exactly 2 sentences: one for recent trends, one for medium-term trends. Be accurate and factual.'
+            },
             {
               role: 'user',
               content: prompt
             }
           ],
-          temperature: 0.7,
-          max_tokens: 150
+          temperature: 0.2,
+          max_tokens: 350
         })
       });
 
@@ -499,6 +717,28 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
     }
   };
 
+  // Typing effect for AI summary
+  useEffect(() => {
+    if (!aiSummary) {
+      setDisplayedSummary('');
+      return;
+    }
+
+    let currentIndex = 0;
+    setDisplayedSummary('');
+
+    const typingInterval = setInterval(() => {
+      if (currentIndex < aiSummary.length) {
+        setDisplayedSummary(aiSummary.substring(0, currentIndex + 1));
+        currentIndex++;
+      } else {
+        clearInterval(typingInterval);
+      }
+    },10); // 10ms per character for faster typing
+
+    return () => clearInterval(typingInterval);
+  }, [aiSummary]);
+
   const handleVariableSelect = (variable: Variable) => {
     setSelectedVariable(variable);
     setIsDropdownOpen(false);
@@ -507,7 +747,28 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
     setChartData(null);
     setLocationsWithNoData([]);
     setAiSummary('');
+    setDisplayedSummary('');
+    setTimelineStart(0); // Reset to show all data
+    setTimelineEnd(100);
   };
+
+  // Filter chart data based on timeline range (start and end percentages) - memoized to prevent glitches
+  const filteredChartData = useMemo(() => {
+    if (!chartData || chartData.length === 0) return null;
+    
+    const totalPoints = chartData.length;
+    
+    // Calculate start and end indices based on percentages
+    const startIndex = Math.floor((timelineStart / 100) * totalPoints);
+    const endIndex = Math.ceil((timelineEnd / 100) * totalPoints);
+    
+    // Ensure we have at least 2 data points
+    const validStartIndex = Math.max(0, Math.min(startIndex, totalPoints - 2));
+    const validEndIndex = Math.max(validStartIndex + 2, Math.min(endIndex, totalPoints));
+    
+    // Return the selected range
+    return chartData.slice(validStartIndex, validEndIndex);
+  }, [chartData, timelineStart, timelineEnd]);
 
   // Helper function to check if a variable is a Pro variable
   const isProVariable = (variable: Variable | null) => {
@@ -523,7 +784,17 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
       'median_income', 
       'gdp',
       'Monthly_Median_GrossRent_HousingUnit',
-      'median_home_value'
+      'median_home_value',
+      // RentCast rental market variables
+      'averageRent',
+      'medianRent',
+      'averageRentPerSquareFoot',
+      'medianRentPerSquareFoot',
+      // RentCast sale market variables
+      'averagePrice',
+      'medianPrice',
+      'averagePricePerSquareFoot',
+      'medianPricePerSquareFoot'
     ];
     return currencyVariables.includes(variableId);
   };
@@ -543,15 +814,20 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
 
   // Custom tooltip component with percentage change
   const CustomTooltip = ({ active, payload, label }: any) => {
-    if (!active || !payload || !chartData) return null;
+    if (!active || !payload || !filteredChartData) return null;
 
     // Find the current data point index
-    const currentIndex = chartData.findIndex(d => d.date === label);
-    const previousData = currentIndex > 0 ? chartData[currentIndex - 1] : null;
+    const currentIndex = filteredChartData.findIndex(d => d.date === label);
+    const previousData = currentIndex > 0 ? filteredChartData[currentIndex - 1] : null;
+
+    // Format the date label - if it contains a dash, it's monthly data (YYYY-MM)
+    const formattedDate = label.includes('-') && label.split('-').length === 2
+      ? new Date(label + '-01').toLocaleDateString('en-US', { year: 'numeric', month: 'short' })
+      : label; // Otherwise it's just a year
 
     return (
       <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3">
-        <p className="font-semibold text-gray-900 dark:text-gray-100 mb-2">Year: {label}</p>
+        <p className="font-semibold text-gray-900 dark:text-gray-100 mb-2">{formattedDate}</p>
         {payload.map((entry: any, index: number) => {
           const currentValue = entry.value;
           const locationName = entry.name;
@@ -622,13 +898,13 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
   return (
     <div className="space-y-6">
       {/* Three Steps in a Row */}
-      <div className="grid grid-cols-3 gap-0">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-0">
         {/* Step 1: Choose Geo-level */}
-        <div className="px-6 py-4 border-r border-gray-200 dark:border-gray-700">
+        <div className="px-6 py-4 lg:border-r border-gray-200 dark:border-gray-700">
           <label className="block text-base font-medium text-gray-900 dark:text-gray-100 mb-4 text-center">
             1. Choose Geo-level
           </label>
-          <div className="flex gap-2">
+          <div className="flex flex-col sm:flex-row gap-2">
             <button
               type="button"
               onClick={() => setLocationType('zip')}
@@ -692,7 +968,7 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
         </div>
 
         {/* Step 2: Enter Location */}
-        <div className="px-6 py-4 border-r border-gray-200 dark:border-gray-700">
+        <div className="px-6 py-4 lg:border-r border-gray-200 dark:border-gray-700">
           <label className="block text-base font-medium text-gray-900 dark:text-gray-100 mb-4 text-center">
             2. Enter Locations (up to 3)
           </label>
@@ -793,7 +1069,7 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
                           >
                             <span className="text-sm text-gray-900 dark:text-gray-100">{variable.name}</span>
                             <span className="text-xs px-1.5 py-0.5 bg-brand-100 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300 rounded">
-                              Pro
+                              PRO
                             </span>
                           </button>
                         ))}
@@ -818,7 +1094,7 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
                           >
                             <span className="text-sm text-gray-900 dark:text-gray-100">{variable.name}</span>
                             <span className="text-xs px-1.5 py-0.5 bg-brand-100 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300 rounded">
-                              Pro
+                              PRO
                             </span>
                           </button>
                         ))}
@@ -1092,7 +1368,7 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
               
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart 
-                  data={chartData}
+                  data={filteredChartData}
                   margin={{ top: 20, right: 30, left: 80, bottom: 20 }}
                 >
                   <defs>
@@ -1120,7 +1396,16 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
                     stroke="#6b7280"
                     tick={{ fill: '#6b7280', fontSize: 12 }}
                     axisLine={{ stroke: '#d1d5db' }}
-                    label={{ value: 'Year', position: 'insideBottom', offset: -10, fill: '#6b7280' }}
+                    tickFormatter={(value) => {
+                      // If the date is in YYYY-MM format, show month and year (e.g., "Jan 2024")
+                      if (value.includes('-') && value.split('-').length === 2) {
+                        const [year, month] = value.split('-');
+                        const date = new Date(`${year}-${month}-01`);
+                        return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+                      }
+                      return value;
+                    }}
+                    label={{ value: 'Date', position: 'insideBottom', offset: -10, fill: '#6b7280' }}
                   />
                   <YAxis 
                     width={100}
@@ -1159,23 +1444,115 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
                         name={location.value}
                         stroke={color}
                         strokeWidth={3}
+                        strokeDasharray="5 5"
+                        connectNulls={true}
                         dot={{ 
                           r: 5, 
                           fill: color,
                           strokeWidth: 2,
-                          stroke: '#fff'
+                          stroke: '#fff',
+                          strokeDasharray: '0'
                         }}
                         activeDot={{ 
                           r: 7,
                           fill: color,
                           strokeWidth: 2,
-                          stroke: '#fff'
+                          stroke: '#fff',
+                          strokeDasharray: '0'
                         }}
                       />
                     );
                   })}
                 </LineChart>
               </ResponsiveContainer>
+            </div>
+
+            {/* Timeline Range Slider */}
+            <div className="mt-4 bg-white dark:bg-gray-900 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+              <div className="flex items-center gap-4">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                  Timeline Range:
+                </label>
+                <div className="flex-1 flex items-center gap-3">
+                  <span className="text-xs text-gray-500 dark:text-gray-400 min-w-[80px] text-right">
+                    {filteredChartData && filteredChartData.length > 0 
+                      ? (() => {
+                          const date = filteredChartData[0].date;
+                          if (date.includes('-') && date.split('-').length === 2) {
+                            const [year, month] = date.split('-');
+                            return new Date(`${year}-${month}-01`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+                          }
+                          return date;
+                        })()
+                      : 'Start'}
+                  </span>
+                  <div className="flex-1 relative h-8 flex items-center">
+                    {/* Base track */}
+                    <div className="absolute w-full h-2 bg-gray-300 dark:bg-gray-600 rounded-lg" />
+                    
+                    {/* Selected range track */}
+                    <div 
+                      className="absolute h-2 rounded-lg pointer-events-none"
+                      style={{
+                        left: `${timelineStart}%`,
+                        width: `${timelineEnd - timelineStart}%`,
+                        backgroundColor: '#1D98BA'
+                      }}
+                    />
+                    
+                    {/* Start handle */}
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={timelineStart}
+                      onChange={(e) => {
+                        const newStart = Number(e.target.value);
+                        if (newStart < timelineEnd - 5) {
+                          setTimelineStart(newStart);
+                        }
+                      }}
+                      className="absolute w-full appearance-none bg-transparent cursor-pointer range-slider-start"
+                      style={{
+                        zIndex: 5
+                      }}
+                    />
+                    
+                    {/* End handle */}
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={timelineEnd}
+                      onChange={(e) => {
+                        const newEnd = Number(e.target.value);
+                        if (newEnd > timelineStart + 5) {
+                          setTimelineEnd(newEnd);
+                        }
+                      }}
+                      className="absolute w-full appearance-none bg-transparent cursor-pointer range-slider-end"
+                      style={{
+                        zIndex: 4
+                      }}
+                    />
+                  </div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 min-w-[80px]">
+                    {filteredChartData && filteredChartData.length > 0 
+                      ? (() => {
+                          const date = filteredChartData[filteredChartData.length - 1].date;
+                          if (date.includes('-') && date.split('-').length === 2) {
+                            const [year, month] = date.split('-');
+                            return new Date(`${year}-${month}-01`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+                          }
+                          return date;
+                        })()
+                      : 'End'}
+                  </span>
+                </div>
+                <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400 whitespace-nowrap min-w-[70px] text-center">
+                  {filteredChartData?.length || 0} data points
+                </span>
+              </div>
             </div>
 
             {/* Tenantry Insights */}
@@ -1187,7 +1564,7 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                     </svg>
                   </div>
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <h4 className="text-sm font-semibold text-brand-900 dark:text-brand-100 mb-2">
                       Tenantry Insights
                     </h4>
@@ -1196,9 +1573,12 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
                         <Loader2 className="w-4 h-4 animate-spin" />
                         <span>Analyzing data trends...</span>
                       </div>
-                    ) : aiSummary ? (
-                      <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
-                        {aiSummary}
+                    ) : displayedSummary ? (
+                      <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-normal break-words">
+                        {displayedSummary}
+                        {displayedSummary.length < aiSummary.length && (
+                          <span className="inline-block w-1 h-4 ml-0.5 bg-brand-500 animate-pulse" />
+                        )}
                       </p>
                     ) : null}
                   </div>
@@ -1208,7 +1588,11 @@ Provide exactly 2 sentences that highlight 1-2 core insights from this data. Fol
 
             {/* Data Source */}
             <div className="mt-4 text-xs text-gray-500 dark:text-gray-400 text-center">
-              Source: <a href="https://datacommons.org" target="_blank" rel="noopener noreferrer" className="text-brand-500 hover:text-brand-600 underline">Data Commons</a>
+              Source: {isProVariable(selectedVariable) ? (
+                <a href="https://www.rentcast.io/" target="_blank" rel="noopener noreferrer" className="text-brand-500 hover:text-brand-600 underline">RentCast API</a>
+              ) : (
+                <a href="https://datacommons.org" target="_blank" rel="noopener noreferrer" className="text-brand-500 hover:text-brand-600 underline">Data Commons</a>
+              )}
             </div>
           </div>
         ) : null}

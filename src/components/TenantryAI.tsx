@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Plus, History, MessageSquare, ChevronLeft } from 'lucide-react';
+import { Send, Plus, History, MessageSquare, ChevronLeft, X } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 
 interface TenantryAIProps {
   user: User;
+  onClose?: () => void;
+  isPanel?: boolean;
 }
 
 interface ChatSession {
@@ -18,7 +20,7 @@ interface ChatMessage {
   sender: 'user' | 'bot';
 }
 
-export default function TenantryAI({ user }: TenantryAIProps) {
+export default function TenantryAI({ user, onClose, isPanel = false }: TenantryAIProps) {
   // Current session ID - format: {userId}_{timestamp}
   const [sessionId, setSessionId] = useState<string>(() => {
     // Check if there's a saved session in localStorage
@@ -436,47 +438,82 @@ export default function TenantryAI({ user }: TenantryAIProps) {
   };
 
   return (
-    <div className="p-6">
-      <div className="max-w-4xl mx-auto">
+    <div className={`${isPanel ? 'h-full flex flex-col' : 'p-6'}`}>
+      <div className={`${isPanel ? 'h-full flex flex-col' : 'max-w-4xl mx-auto'}`}>
         {/* Header with New Chat and History buttons */}
-        <div className="mb-8 flex items-start justify-between">
-          <div>
-            <h1 className="text-3xl font-semibold text-gray-900 dark:text-gray-100 mb-2">Tenantry AI</h1>
+        <div className={`${isPanel ? 'p-6 border-b border-gray-200 dark:border-gray-700' : 'mb-8'} flex items-start justify-between`}>
+          <div className="flex-1">
+            <div className="flex items-center justify-between mb-2">
+              <h1 className="text-3xl font-semibold text-gray-900 dark:text-gray-100">Tenantry AI</h1>
+              {isPanel && onClose && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={startNewChat}
+                    className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-gray-500 dark:text-gray-400"
+                    aria-label="Start New Chat"
+                    title="New Chat"
+                  >
+                    <Plus className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={toggleHistory}
+                    className={`p-2 rounded-lg transition-colors ${
+                      showHistory 
+                        ? 'bg-brand-100 dark:bg-brand-900 text-brand-600 dark:text-brand-400' 
+                        : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+                    }`}
+                    aria-label="View Chat History"
+                    title="Chat History"
+                  >
+                    <History className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={onClose}
+                    className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-gray-500 dark:text-gray-400"
+                    aria-label="Close panel"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              )}
+            </div>
             <p className="text-gray-600 dark:text-gray-400">
               Ask me anything about rental markets, property analysis, or real estate trends
             </p>
           </div>
-          <div className="flex gap-2">
-            {/* New Chat Button */}
-            <button
-              onClick={startNewChat}
-              className="flex items-center gap-2 px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-lg transition-all"
-              title="Start New Chat"
-            >
-              <Plus className="w-5 h-5" />
-              <span className="hidden sm:inline">New Chat</span>
-            </button>
-            {/* Chat History Button */}
-            <button
-              onClick={toggleHistory}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
-                showHistory 
-                  ? 'bg-brand-100 dark:bg-brand-900 text-brand-600 dark:text-brand-400 border border-brand-300 dark:border-brand-700' 
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
-              }`}
-              title="View Chat History"
-            >
-              <History className="w-5 h-5" />
-              <span className="hidden sm:inline">History</span>
-            </button>
-          </div>
+          {!isPanel && (
+            <div className="flex gap-2">
+              {/* New Chat Button */}
+              <button
+                onClick={startNewChat}
+                className="flex items-center gap-2 px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-lg transition-all"
+                title="Start New Chat"
+              >
+                <Plus className="w-5 h-5" />
+                <span className="hidden sm:inline">New Chat</span>
+              </button>
+              {/* Chat History Button */}
+              <button
+                onClick={toggleHistory}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
+                  showHistory 
+                    ? 'bg-brand-100 dark:bg-brand-900 text-brand-600 dark:text-brand-400 border border-brand-300 dark:border-brand-700' 
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                }`}
+                title="View Chat History"
+              >
+                <History className="w-5 h-5" />
+                <span className="hidden sm:inline">History</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Main Content Area */}
-        <div className="flex gap-4">
+        <div className={`${isPanel ? 'flex-1 flex flex-col px-6 pb-6 pt-4 min-h-0' : 'flex gap-4'}`}>
           {/* Chat History Sidebar */}
           {showHistory && (
-            <div className="w-80 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4 h-[600px] overflow-hidden flex flex-col">
+            <div className={`${isPanel ? 'mb-4' : 'w-80'} bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4 ${isPanel ? 'h-64' : 'h-[600px]'} overflow-hidden flex flex-col`}>
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-semibold text-gray-900 dark:text-gray-100">Previous Chats</h3>
                 <button
@@ -538,9 +575,13 @@ export default function TenantryAI({ user }: TenantryAIProps) {
           )}
 
           {/* Chat Area */}
-          <div className={`flex-1 ${showHistory ? 'max-w-[calc(100%-21rem)]' : ''}`}>
+          <div className={`flex-1 ${isPanel ? 'flex flex-col min-h-0' : showHistory ? 'max-w-[calc(100%-21rem)]' : ''}`}>
             {/* Messages Area */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 space-y-4 min-h-[500px] max-h-[600px] overflow-y-auto mb-6">
+            <div className={`bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 space-y-4 overflow-y-auto ${
+              isPanel 
+                ? 'flex-1 min-h-0 mb-4' 
+                : 'min-h-[500px] max-h-[600px] mb-6'
+            }`}>
               {messages.map((message, index) => (
                 <div
                   key={index}

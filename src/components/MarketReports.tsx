@@ -335,7 +335,7 @@ export default function MarketReports({ userId, onNavigateToSupport, hideTitle =
               >
                 <div className="absolute top-4 right-4">
                   <span className="bg-brand-500 text-white text-xs font-semibold px-2 py-1 rounded">
-                    Pro
+                    PRO
                   </span>
                 </div>
                 <div className="flex items-center gap-3 mb-3">
