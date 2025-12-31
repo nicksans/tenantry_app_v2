@@ -291,7 +291,7 @@ export default function MarketAnalysis({ userId, onNavigateToSupport }: MarketAn
 
   return (
     <div className="p-6">
-      <div className="max-w-6xl mx-auto">
+      <div className={selectedTool === 'map-view' ? 'max-w-[1800px] mx-auto' : 'max-w-6xl mx-auto'}>
         {!selectedTool && (
           <div className="mb-10">
             <h1 className="text-3xl font-semibold text-gray-900 dark:text-gray-100 mb-2">Market Analysis</h1>
