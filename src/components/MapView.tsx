@@ -10,6 +10,7 @@ interface Variable {
   id: string;
   name: string;
   description?: string;
+  category?: string;
   key?: string;
   value_type?: string;
 }
@@ -77,69 +78,19 @@ export default function MapView() {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapRef>(null);
 
-  // Variable descriptions for tooltips (keyed by the variable key from database)
-  const variableDescriptions: Record<string, string> = {
-    'median_listing_price': 'The median asking price of homes currently listed for sale. This reflects current seller expectations and pricing conditions.',
-    'median_listing_price_mm': 'The month-over-month change in median listing price. Short-term increases suggest accelerating prices, while declines signal cooling.',
-    'median_listing_price_yy': 'The year-over-year change in median listing price. Long-term trends help identify appreciation or correction phases.',
-    'active_listing_count': 'The total number of homes actively listed for sale. Higher inventory levels generally indicate more buyer choice and less competition.',
-    'active_listing_count_mm': 'The month-over-month change in active listings. Rising values suggest inventory buildup, while declines indicate tightening supply.',
-    'active_listing_count_yy': 'The year-over-year change in active listings. Sustained increases often signal weakening demand or overbuilding.',
-    'median_days_on_market': 'The median number of days homes remain on the market before selling. Shorter times indicate stronger demand and competition.',
-    'median_days_on_market_mm': 'The month-over-month change in median days on market. Increases suggest slowing sales velocity.',
-    'median_days_on_market_yy': 'The year-over-year change in median days on market. Longer durations often indicate cooling or buyer-favorable conditions.',
-    'new_listing_count': 'The number of newly listed homes in the period. Indicates how much fresh supply is entering the market.',
-    'new_listing_count_mm': 'The month-over-month change in new listings. Rising values suggest increasing seller activity.',
-    'new_listing_count_yy': 'The year-over-year change in new listings. Sustained growth may indicate confidence or pressure to sell.',
-    'price_increased_count': 'The number of listings that increased their asking price. Higher counts often reflect seller confidence.',
-    'price_increased_count_mm': 'The month-over-month change in price increases. Declines suggest weakening pricing power.',
-    'price_increased_count_yy': 'The year-over-year change in price increases. Long-term drops often signal shifting market sentiment.',
-    'price_increased_share': 'The percentage of listings with price increases. Higher percentages indicate stronger seller leverage.',
-    'price_increased_share_mm': 'The month-over-month change in the price increase percentage. Falling values suggest reduced pricing confidence.',
-    'price_increased_share_yy': 'The year-over-year change in the price increase percentage. Helps identify longer-term shifts in seller behavior.',
-    'price_reduced_count': 'The number of listings that reduced their asking price. Higher counts often indicate buyer resistance.',
-    'price_reduced_count_mm': 'The month-over-month change in price cuts. Rising values suggest softening demand.',
-    'price_reduced_count_yy': 'The year-over-year change in price cuts. Sustained increases often reflect broader market cooling.',
-    'price_reduced_share': 'The percentage of listings with price reductions. Higher percentages indicate increased buyer leverage.',
-    'price_reduced_share_mm': 'The month-over-month change in the price cut percentage. Sharp increases can signal rapid demand shifts.',
-    'price_reduced_share_yy': 'The year-over-year change in the price cut percentage. Long-term increases suggest structural softening.',
-    'pending_listing_count': 'The number of listings currently under contract. Higher values indicate active buyer engagement.',
-    'pending_listing_count_mm': 'The month-over-month change in pending listings. Rising values suggest strengthening demand.',
-    'pending_listing_count_yy': 'The year-over-year change in pending listings. Declines may indicate weakening buyer activity.',
-    'median_listing_price_per_square_foot': 'The median listing price per square foot. Useful for comparing pricing efficiency across markets and property sizes.',
-    'median_listing_price_per_square_foot_mm': 'The month-over-month change in price per square foot. Short-term increases suggest tightening supply or rising demand.',
-    'median_listing_price_per_square_foot_yy': 'The year-over-year change in price per square foot. Long-term trends reflect structural pricing shifts.',
-    'median_square_feet': 'The median size of homes listed for sale. Helps contextualize price movements and buyer preferences.',
-    'median_square_feet_mm': 'The month-over-month change in median square footage. Declines may indicate smaller, more affordable listings entering the market.',
-    'median_square_feet_yy': 'The year-over-year change in median square footage. Helps identify long-term shifts in housing stock composition.',
-    'average_listing_price': 'The average asking price of homes listed for sale. More sensitive to high-end listings than median price.',
-    'average_listing_price_mm': 'The month-over-month change in average listing price. Volatility can signal changes in listing mix.',
-    'average_listing_price_yy': 'The year-over-year change in average listing price. Long-term shifts help identify pricing expansion or contraction.',
-    'total_listing_count': 'The total number of homes listed for sale, including all statuses. Higher totals indicate broader supply availability.',
-    'total_listing_count_mm': 'The month-over-month change in total listings. Rising values suggest expanding inventory.',
-    'total_listing_count_yy': 'The year-over-year change in total listings. Sustained growth often indicates weaker demand or overbuilding.',
-    'pending_ratio': 'The ratio of pending listings to active listings. Higher ratios indicate stronger demand relative to supply.',
-    'pending_ratio_mm': 'The month-over-month change in the pending ratio. Rising values suggest improving market momentum.',
-    'pending_ratio_yy': 'The year-over-year change in the pending ratio. Long-term declines often indicate demand erosion.',
-    'quality_flag': 'A data quality indicator for the underlying listing metrics. Use this to identify periods or markets where data may be incomplete or less reliable.',
-    'market_rent': 'The typical market rent across all rental units. This serves as the baseline for rental yield and affordability analysis.',
-    'market_rent_sfr': 'The typical market rent across all single-family rental units. This serves as the baseline for rental yield and affordability analysis.',
-    'market_rent_metro_sfr': 'The typical market rent across all single-family rental units. This serves as the baseline for rental yield and affordability analysis.',
-    'market_rent_mfr': 'The typical market rent across all multi-family rental units. This serves as the baseline for rental yield and affordability analysis.',
-    'market_rent_metro_mfr': 'The typical market rent across all multi-family rental units. This serves as the baseline for rental yield and affordability analysis.',
-    'market_rent_county_mfr': 'The typical market rent across all multi-family rental units. This serves as the baseline for rental yield and affordability analysis.',
-    'market_rent_zip_mfr': 'The typical market rent across all multi-family rental units. This serves as the baseline for rental yield and affordability analysis.'
-  };
-
   // Variable sources - map variable keys to their data sources
   const variableSources: Record<string, string> = {
     'market_rent': 'Zillow Observed Rent Index (ZORI)',
-    'market_rent_sfr': 'Zillow Observed Rent Index (ZORI)',
     'market_rent_metro_sfr': 'Zillow Observed Rent Index (ZORI)',
-    'market_rent_mfr': 'Zillow Observed Rent Index (ZORI)',
     'market_rent_metro_mfr': 'Zillow Observed Rent Index (ZORI)',
-    'market_rent_county_mfr': 'Zillow Observed Rent Index (ZORI)',
-    'market_rent_zip_mfr': 'Zillow Observed Rent Index (ZORI)'
+    'zordi_metro_all': 'Zillow Observed Renter Demand Index (ZORDI)'
+  };
+
+  // Available geographic levels for each variable
+  const variableGeoLevels: Record<string, string> = {
+    'market_rent': 'National, State, Metro, County, ZIP',
+    'market_rent_metro_sfr': 'National, State, Metro, County, ZIP',
+    'market_rent_metro_mfr': 'National, State, Metro, County, ZIP'
   };
 
   // Restrict map to US boundaries
@@ -174,7 +125,7 @@ export default function MapView() {
       try {
         const { data, error } = await supabase
           .from('variables')
-          .select('id, key, label, category, value_type')
+          .select('id, key, label, category, value_type, description')
           .order('label');
         
         if (error) throw error;
@@ -184,9 +135,12 @@ export default function MapView() {
           id: v.id,
           name: v.label,
           key: v.key,
-          description: v.category || undefined,
+          category: v.category || undefined,
+          description: v.description || undefined,
           value_type: v.value_type || undefined
         }));
+        
+        // Variables loaded successfully
         
         setDatabaseVariables(vars);
       } catch (error) {
@@ -208,7 +162,11 @@ export default function MapView() {
 
     const fetchMetricData = async () => {
       setLoadingMetricData(true);
+      
       try {
+        // Check if this is a ZORDI variable (uses pre-calculated pct_change_prev field)
+        const isZordiVariable = selectedVariable.key?.toLowerCase().includes('zordi') || false;
+        
         // First, get the most recent date for this variable
         const { data: dateData, error: dateError } = await supabase
           .from('metric_observations')
@@ -219,63 +177,68 @@ export default function MapView() {
         
         if (dateError) throw dateError;
         if (!dateData || dateData.length === 0) {
-          console.log('No data found for this variable');
           setMetricData([]);
           setLoadingMetricData(false);
           return;
         }
 
         const mostRecentDate = dateData[0].date;
-        console.log('Most recent date:', mostRecentDate);
         
-        // Now fetch all observations for this variable on that date
-        const { data, error } = await supabase
-          .from('metric_observations')
-          .select(`
-            geo_entity_id,
-            variable_id,
-            value,
-            date,
-            geo_entity:geo_entities (
-              id,
-              geoid,
-              geo_level,
-              name,
-              state_abbr,
-              county_fips,
-              cbsa_code,
-              zcta
-            )
-          `)
-          .eq('variable_id', selectedVariable.id)
-          .eq('date', mostRecentDate);
+        // Fetch ALL observations for this variable on that date
+        let allData: any[] = [];
+        let fetchMore = true;
+        let offset = 0;
+        const batchSize = 1000;
         
-        if (error) throw error;
-        
-        console.log('Fetched metric data:', data?.length, 'observations');
-        
-        // Debug: Check what geo levels we have
-        const geoLevels = new Set(data?.map((obs: any) => {
-          const geoEntity = Array.isArray(obs.geo_entity) ? obs.geo_entity[0] : obs.geo_entity;
-          return geoEntity?.geo_level;
-        }));
-        console.log('Available geo levels in data:', Array.from(geoLevels));
-        
-        // Debug: Show sample metro data if available (database uses 'msa' for metro)
-        const metroObs = data?.filter((obs: any) => {
-          const geoEntity = Array.isArray(obs.geo_entity) ? obs.geo_entity[0] : obs.geo_entity;
-          return geoEntity?.geo_level === 'metro' || geoEntity?.geo_level === 'msa';
-        });
-        console.log('Metro observations found:', metroObs?.length);
-        if (metroObs && metroObs.length > 0) {
-          const sampleGeoEntity = Array.isArray(metroObs[0].geo_entity) ? metroObs[0].geo_entity[0] : metroObs[0].geo_entity;
-          console.log('Sample metro observation:', {
-            name: sampleGeoEntity?.name,
-            cbsa_code: sampleGeoEntity?.cbsa_code,
-            value: metroObs[0].value,
-            geo_entity: metroObs[0].geo_entity
-          });
+        while (fetchMore) {
+          const { data: batchData, error } = await supabase
+            .from('metric_observations')
+            .select(`
+              geo_entity_id,
+              variable_id,
+              value,
+              date,
+              ${isZordiVariable ? 'pct_change_prev,' : ''}
+              geo_entity:geo_entities (
+                id,
+                geoid,
+                geo_level,
+                name,
+                state_abbr,
+                county_fips,
+                cbsa_code,
+                zcta
+              )
+            `)
+            .eq('variable_id', selectedVariable.id)
+            .eq('date', mostRecentDate)
+            .order('geo_entity_id')
+            .range(offset, offset + batchSize - 1);
+          
+          if (error) throw error;
+          
+          if (batchData && batchData.length > 0) {
+            allData = allData.concat(batchData);
+            offset += batchSize;
+            fetchMore = batchData.length === batchSize;
+          } else {
+            fetchMore = false;
+          }
         }
+        
+        // For ZORDI variables, use pct_change_prev as the value (multiply by 100 since it's stored as decimal)
+        if (isZordiVariable) {
+          allData = allData.map(obs => ({
+            ...obs,
+            value: obs.pct_change_prev !== null && obs.pct_change_prev !== undefined 
+              ? obs.pct_change_prev * 100  // Convert from decimal to percentage (e.g., -0.115 -> -11.5)
+              : obs.value
+          }));
+        }
+        
+        const data = allData;
+        
+        console.log(`📊 Loaded ${data.length} observations for ${selectedVariable.name} (${selectedVariable.key})`);
         
         setMetricData(data as any || []);
       } catch (error) {
@@ -296,19 +259,38 @@ export default function MapView() {
     if (variable.value_type === 'currency') return true;
     // Also treat as currency if name includes rent, price, or income
     const name = variable.name?.toLowerCase() || '';
+    const key = variable.key?.toLowerCase() || '';
+    // Exclude variables with "demand" in the name (e.g., "Rental Demand")
+    if (name.includes('demand')) return false;
+    // Exclude ZORDI variables (e.g., "zordi_metro_all")
+    if (key.includes('zordi')) return false;
     return name.includes('rent') || name.includes('price') || name.includes('income');
+  };
+
+  // Helper to determine if a variable should be displayed as percentage
+  const isPercentageVariable = (variable: Variable | null): boolean => {
+    if (!variable) return false;
+    if (variable.value_type === 'percent') return true;
+    const key = variable.key?.toLowerCase() || '';
+    // ZORDI variables should be displayed as percentages (they're percentage changes)
+    if (key.includes('zordi')) return true;
+    return false;
   };
 
   const getColorForValue = (value: number, min: number, max: number): string => {
     if (max === min) return '#a5b4fc'; // Default color if all values are the same (light purple)
     
-    const normalized = (value - min) / (max - min);
+    // Clamp value to min/max range (so outliers get the extreme colors)
+    const clampedValue = Math.max(min, Math.min(max, value));
+    const normalized = (clampedValue - min) / (max - min);
     
-    // 3-color scale: blue (low) to cream (middle) to red (high)
+    // 5-color scale: blue (low) → white (middle) → red (high)
     const colors = [
-      { stop: 0, color: [96, 165, 250] },      // Soft blue (low values)
-      { stop: 0.5, color: [250, 240, 230] },   // Cream (middle values)
-      { stop: 1, color: [248, 113, 113] }      // Soft red (high values)
+      { stop: 0, color: [59, 130, 246] },      // Blue-500 (lowest values)
+      { stop: 0.25, color: [147, 197, 253] },  // Blue-300 (low values)
+      { stop: 0.5, color: [255, 255, 255] },   // White (medium values)
+      { stop: 0.75, color: [252, 165, 165] },  // Red-300 (high values)
+      { stop: 1, color: [239, 68, 68] }        // Red-500 (highest values)
     ];
     
     // Find the two colors to interpolate between
@@ -339,7 +321,7 @@ export default function MapView() {
     const geoLevel = getGeoLevel(viewState.zoom);
     const valueMap = new Map<string, { value: number; date: string }>();
     
-    console.log('Creating value map for geo level:', geoLevel);
+    // Creating value map for the current geo level
     
     // For national level, calculate average of all state data
     if (geoLevel === 'national') {
@@ -386,10 +368,11 @@ export default function MapView() {
       if (geoLevel === 'state') {
         key = geoEntity.name; // Match by state name
       } else if (geoLevel === 'metro') {
-        // Now using proper Census CBSA codes from database
-        key = geoEntity.cbsa_code;
+        // ALWAYS use CBSA code for metro matching - normalize to string and trim
+        key = geoEntity.cbsa_code?.toString().trim();
       } else if (geoLevel === 'county') {
-        key = geoEntity.county_fips || geoEntity.geoid; // Match by FIPS code
+        // Use county_fips directly (it already has 'county:' prefix in database)
+        key = geoEntity.county_fips || geoEntity.geoid;
       } else if (geoLevel === 'zip') {
         key = geoEntity.zcta; // Match by ZCTA
       }
@@ -399,12 +382,37 @@ export default function MapView() {
       }
     });
     
+    // ValueMap created successfully
+    
     return valueMap;
   };
 
   // Get min and max values for color scaling
   const getValueRange = () => {
     const geoLevel = getGeoLevel(viewState.zoom);
+    
+    // Helper function to calculate percentile-based range (excludes outliers)
+    const getPercentileRange = (values: number[]) => {
+      if (values.length === 0) return { min: 0, max: 0, actualMin: 0, actualMax: 0 };
+      
+      // Sort values
+      const sorted = [...values].sort((a, b) => a - b);
+      
+      // Get actual min/max
+      const actualMin = sorted[0];
+      const actualMax = sorted[sorted.length - 1];
+      
+      // Use 5th and 95th percentiles for color scaling
+      const p5Index = Math.floor(sorted.length * 0.05);
+      const p95Index = Math.floor(sorted.length * 0.95);
+      
+      return {
+        min: sorted[p5Index] || sorted[0],
+        max: sorted[p95Index] || sorted[sorted.length - 1],
+        actualMin,
+        actualMax
+      };
+    };
     
     // For national level, use all state values for range
     if (geoLevel === 'national') {
@@ -416,12 +424,7 @@ export default function MapView() {
         })
         .map(obs => obs.value);
       
-      if (values.length === 0) return { min: 0, max: 0 };
-      
-      return {
-        min: Math.min(...values),
-        max: Math.max(...values)
-      };
+      return getPercentileRange(values);
     }
     
     const values = metricData
@@ -436,12 +439,7 @@ export default function MapView() {
       })
       .map(obs => obs.value);
     
-    if (values.length === 0) return { min: 0, max: 0 };
-    
-    return {
-      min: Math.min(...values),
-      max: Math.max(...values)
-    };
+    return getPercentileRange(values);
   };
 
   // Load national boundaries when at national level
@@ -449,13 +447,12 @@ export default function MapView() {
     const geoLevel = getGeoLevel(viewState.zoom);
     
     // Load national data when at national level
-    if (geoLevel === 'national' && !nationalData && !loadingNational && !stateData) {
+    if (geoLevel === 'national' && !nationalData && !loadingNational) {
       setLoadingNational(true);
-      // Load states first, then we'll dissolve them into a national boundary
-      fetch('/data/us-states.json')
+      fetch('/data/us-nation.json')
         .then(response => response.json())
         .then(data => {
-          setStateData(data);
+          setNationalData(data);
           setLoadingNational(false);
         })
         .catch(error => {
@@ -468,7 +465,7 @@ export default function MapView() {
     if (geoLevel !== 'national' && nationalData) {
       setNationalData(null);
     }
-  }, [viewState.zoom, nationalData, loadingNational, stateData]);
+  }, [viewState.zoom, nationalData, loadingNational]);
 
   // Load state boundaries when at state level
   useEffect(() => {
@@ -510,17 +507,15 @@ export default function MapView() {
           return response.json();
         })
         .then(data => {
-          console.log('Metro data loaded successfully:', data);
-          console.log('First geometry sample:', data.geometries?.[0]);
-          console.log('First feature sample (if FeatureCollection):', data.features?.[0]);
+          // Metro data loaded successfully
           
           // Handle GeometryCollection format (convert to FeatureCollection)
           if (data.type === 'GeometryCollection' && data.geometries) {
-            console.log('Converting GeometryCollection to FeatureCollection');
+            // Converting GeometryCollection to FeatureCollection
             const featureCollection = {
               type: 'FeatureCollection',
               features: data.geometries.map((geometry: any, index: number) => {
-                console.log(`Geometry ${index} properties:`, geometry.properties);
+                // Geometry properties processed
                 return {
                   type: 'Feature',
                   id: geometry.id || index,
@@ -532,7 +527,7 @@ export default function MapView() {
                 };
               })
             };
-            console.log('Converted feature sample:', featureCollection.features[0]);
+            // Feature collection converted
             setMetroData(featureCollection);
             setLoadingMetros(false);
             return;
@@ -545,8 +540,7 @@ export default function MapView() {
             return;
           }
           
-          console.log('Using standard FeatureCollection format');
-          console.log('Feature 0 properties:', data.features[0]?.properties);
+          // Using standard FeatureCollection format
           
           // Clean metro names by removing state abbreviations (everything after comma)
           const cleanedData = {
@@ -669,7 +663,7 @@ export default function MapView() {
           }
         });
         
-        console.log(`Loaded ${filteredFeatures.length} ZIP codes out of ${data.features.length} total (viewport filtered)`);
+        // ZIP codes loaded for viewport
         
         setZipData({
           type: 'FeatureCollection',
@@ -690,15 +684,17 @@ export default function MapView() {
     
     // Load county data when at county level
     if (geoLevel === 'county' && !countyData && !loadingCounties) {
+      // Loading county GeoJSON data
       setLoadingCounties(true);
       fetch('/data/us-counties.json')
         .then(response => response.json())
         .then(data => {
+          // County data loaded
           setCountyData(data);
           setLoadingCounties(false);
         })
         .catch(error => {
-          console.error('Error loading counties:', error);
+          console.error('❌ Error loading counties:', error);
           setLoadingCounties(false);
         });
     }
@@ -732,10 +728,13 @@ export default function MapView() {
 
   // Render state or national boundaries on the map
   useEffect(() => {
-    if (!mapRef.current || !mapLoaded || !stateData) return;
+    const geoLevel = getGeoLevel(viewState.zoom);
+    
+    // For national level, we need nationalData; for state level, we need stateData
+    const requiredData = geoLevel === 'national' ? nationalData : stateData;
+    if (!mapRef.current || !mapLoaded || !requiredData) return;
     
     const map = mapRef.current.getMap();
-    const geoLevel = getGeoLevel(viewState.zoom);
     
     // Skip rendering if we're not at the right level
     if (geoLevel !== 'state' && geoLevel !== 'national') {
@@ -782,35 +781,36 @@ export default function MapView() {
     
     const valueMap = createValueMap();
     const { min, max } = getValueRange();
-    const isPercentage = selectedVariable?.value_type === 'percent';
+    const isPercentage = isPercentageVariable(selectedVariable);
     const isCurrency = isCurrencyVariable(selectedVariable);
+    const isZordi = selectedVariable?.key?.toLowerCase().includes('zordi') || false;
     
-    // For national level, use the single national value for all states
-    const nationalData = geoLevel === 'national' ? valueMap.get('__national__') : undefined;
-    
-    // For national level, create a single merged feature
     let dataToRender;
+    
     if (geoLevel === 'national') {
-      // Create a single feature that represents the entire country
-      // We'll keep all state features but render them as one visual unit
+      // National level: use the us-nation.json file
+      const nationalValue = valueMap.get('__national__');
+      
       dataToRender = {
-        ...stateData,
-        features: stateData.features.map((feature: any, index: number) => ({
+        ...nationalData,
+        features: nationalData.features.map((feature: any, index: number) => ({
           ...feature,
-          id: feature.id || `state-${index}`,
+          id: feature.id || `national-${index}`,
           properties: {
             ...feature.properties,
-            value: nationalData?.value,
-            date: nationalData?.date,
-            color: nationalData?.value !== undefined ? getColorForValue(nationalData.value, min, max) : '#e5e7eb',
+            name: 'United States',
+            value: nationalValue?.value,
+            date: nationalValue?.date,
+            color: nationalValue?.value !== undefined ? getColorForValue(nationalValue.value, min, max) : '#e5e7eb',
             isPercentage: isPercentage,
             isCurrency: isCurrency,
+            isZordi: isZordi,
             isNational: true
           }
         }))
       };
     } else {
-      // State level: show individual state data
+      // State level: use us-states.json and show individual state data
       dataToRender = {
         ...stateData,
         features: stateData.features.map((feature: any, index: number) => {
@@ -827,6 +827,7 @@ export default function MapView() {
               color: dataPoint?.value !== undefined ? getColorForValue(dataPoint.value, min, max) : '#f3f4f6',
               isPercentage: isPercentage,
               isCurrency: isCurrency,
+              isZordi: isZordi,
               isNational: false,
               variableName: selectedVariable?.name || ''
             }
@@ -887,9 +888,7 @@ export default function MapView() {
       features: labelFeatures
     };
     
-    console.log('Geo level:', geoLevel);
-    console.log('Total features:', dataToRender.features.length);
-    console.log('Label features:', uniqueStateLabels.features.length);
+    // State level rendering
     
     map.addSource('state-labels-source', {
       type: 'geojson',
@@ -921,7 +920,7 @@ export default function MapView() {
     });
     
     // Add line layer (for borders)
-    // For national level, show thicker country outline; for state level, show state borders
+    // For national level, show outer country border; for state level, show state borders
     map.addLayer({
       id: 'state-boundaries',
       type: 'line',
@@ -930,21 +929,21 @@ export default function MapView() {
         'line-color': [
           'case',
           ['boolean', ['feature-state', 'hover'], false],
-          '#4b5563',
+          '#4b5563',  // Darker gray on hover
           [
             'case',
             ['has', 'value'],
-            geoLevel === 'national' ? '#4b5563' : '#6b7280', // Normal gray for data
+            geoLevel === 'national' ? '#4b5563' : '#6b7280', // Darker for national, normal gray for states
             '#d1d5db' // Light gray for no data
           ]
         ],
         'line-width': [
           'case',
           ['boolean', ['feature-state', 'hover'], false],
-          4,
-          geoLevel === 'national' ? 3 : 2
+          geoLevel === 'national' ? 5 : 4,  // Extra thick border for hover at national
+          geoLevel === 'national' ? 3 : 2   // Thicker normal border at national
         ],
-        'line-opacity': geoLevel === 'national' ? 0.4 : 0.8
+        'line-opacity': geoLevel === 'national' ? 1.0 : 0.8  // Full opacity for national border
       }
     });
     
@@ -972,8 +971,19 @@ export default function MapView() {
             // Has value - show it
             [
               'case',
+              ['get', 'isZordi'],
+              // ZORDI format: already a percentage, show as whole number
+              [
+                'concat',
+                [
+                  'number-format',
+                  ['round', ['get', 'value']],
+                  { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
+                ],
+                '%'
+              ],
               ['get', 'isPercentage'],
-              // Percentage format
+              // Percentage format (multiply by 100 for non-ZORDI)
               [
                 'concat',
                 [
@@ -1054,11 +1064,13 @@ export default function MapView() {
         }
       }
     };
-  }, [stateData, mapLoaded, selectedVariable, metricData, viewState.zoom, loadingMetricData]);
+  }, [stateData, nationalData, mapLoaded, selectedVariable, metricData, viewState.zoom, loadingMetricData]);
 
   // Render county boundaries on the map
   useEffect(() => {
     if (!mapRef.current || !mapLoaded || !countyData) return;
+    
+    // Rendering county layer
     
     const map = mapRef.current.getMap();
     const geoLevel = getGeoLevel(viewState.zoom);
@@ -1101,16 +1113,41 @@ export default function MapView() {
     
     const valueMap = createValueMap();
     const { min, max } = getValueRange();
-    const isPercentage = selectedVariable?.value_type === 'percent';
+    const isPercentage = isPercentageVariable(selectedVariable);
     const isCurrency = isCurrencyVariable(selectedVariable);
+    const isZordi = selectedVariable?.key?.toLowerCase().includes('zordi') || false;
+    
+    // DEBUG: Log county matching
+    // County level data matching
     
     // Add colors to features based on metric data
+    let matchCount = 0;
     const countyDataWithValues = {
       ...countyData,
       features: countyData.features.map((feature: any, index: number) => {
-        // Try to match by FIPS code (GEOID property in most county GeoJSON files)
-        const countyFips = feature.properties.GEOID || feature.properties.geoid || feature.properties.fips;
-        const dataPoint = valueMap.get(countyFips);
+        // Extract FIPS code from GEO_ID (format: '0500000US01001' -> '01001')
+        let countyFips = null;
+        if (feature.properties.GEO_ID) {
+          countyFips = feature.properties.GEO_ID.replace('0500000US', '');
+        } else if (feature.properties.GEOID) {
+          countyFips = feature.properties.GEOID;
+        } else if (feature.properties.geoid) {
+          countyFips = feature.properties.geoid;
+        } else if (feature.properties.FIPS) {
+          countyFips = feature.properties.FIPS;
+        } else if (feature.properties.fips) {
+          countyFips = feature.properties.fips;
+        }
+        
+        // Try to match with 'county:' prefix
+        let dataPoint = null;
+        if (countyFips) {
+          dataPoint = valueMap.get(`county:${countyFips}`);
+        }
+        
+        if (dataPoint) {
+          matchCount++;
+        }
         
         return {
           ...feature,
@@ -1122,11 +1159,14 @@ export default function MapView() {
             color: dataPoint?.value !== undefined ? getColorForValue(dataPoint.value, min, max) : '#e5e7eb',
             isPercentage: isPercentage,
             isCurrency: isCurrency,
+            isZordi: isZordi,
             variableName: selectedVariable?.name || ''
           }
         };
       })
     };
+    
+    // County matches calculated
     
     map.addSource('county-boundaries', {
       type: 'geojson',
@@ -1207,8 +1247,19 @@ export default function MapView() {
             // Has value - show it
             [
               'case',
+              ['get', 'isZordi'],
+              // ZORDI format: already a percentage, show as whole number
+              [
+                'concat',
+                [
+                  'number-format',
+                  ['round', ['get', 'value']],
+                  { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
+                ],
+                '%'
+              ],
               ['get', 'isPercentage'],
-              // Percentage format
+              // Percentage format (multiply by 100 for non-ZORDI)
               [
                 'concat',
                 [
@@ -1313,12 +1364,18 @@ export default function MapView() {
     
     // If metro data isn't loaded yet, show message (handled in UI)
     if (!metroData) {
-      console.log('Metro data not available, displaying message to user');
+      // Metro data not available yet
       return;
     }
     
     // If a variable is selected but data is still loading, don't render yet
     if (selectedVariable && loadingMetricData) {
+      return;
+    }
+    
+    // CRITICAL: Don't render if we have a variable selected but no data loaded yet
+    if (selectedVariable && (!metricData || metricData.length === 0)) {
+      // Waiting for metric data before rendering metro layers
       return;
     }
     
@@ -1344,15 +1401,16 @@ export default function MapView() {
     
     const valueMap = createValueMap();
     const { min, max } = getValueRange();
-    const isPercentage = selectedVariable?.value_type === 'percent';
+    const isPercentage = isPercentageVariable(selectedVariable);
     const isCurrency = isCurrencyVariable(selectedVariable);
+    const isZordi = selectedVariable?.key?.toLowerCase().includes('zordi') || false;
     
     // Add colors to features based on metric data
     const metroDataWithValues = {
       ...metroData,
       features: metroData.features.map((feature: any, index: number) => {
         // Match by CBSA code (now using proper Census CBSA codes)
-        const cbsaCode = feature.properties.CBSAFP || feature.properties.cbsa_code || feature.properties.CBSA;
+        const cbsaCode = (feature.properties.CBSAFP || feature.properties.cbsa_code || feature.properties.CBSA)?.toString().trim();
         const dataPoint = valueMap.get(cbsaCode);
         
         return {
@@ -1365,6 +1423,7 @@ export default function MapView() {
             color: dataPoint?.value !== undefined ? getColorForValue(dataPoint.value, min, max) : '#e5e7eb',
             isPercentage: isPercentage,
             isCurrency: isCurrency,
+            isZordi: isZordi,
             variableName: selectedVariable?.name || ''
           }
         };
@@ -1456,8 +1515,19 @@ export default function MapView() {
             // Has value - show it
             [
               'case',
+              ['get', 'isZordi'],
+              // ZORDI format: already a percentage, show as whole number
+              [
+                'concat',
+                [
+                  'number-format',
+                  ['round', ['get', 'value']],
+                  { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
+                ],
+                '%'
+              ],
               ['get', 'isPercentage'],
-              // Percentage format
+              // Percentage format (multiply by 100 for non-ZORDI)
               [
                 'concat',
                 [
@@ -1560,7 +1630,7 @@ export default function MapView() {
       return;
     }
     
-    console.log('Rendering ZIP data:', zipData.features?.length, 'features');
+    // Rendering ZIP data
     
     // If a variable is selected but data is still loading, don't render yet
     if (selectedVariable && loadingMetricData) {
@@ -1583,8 +1653,9 @@ export default function MapView() {
     
     const valueMap = createValueMap();
     const { min, max } = getValueRange();
-    const isPercentage = selectedVariable?.value_type === 'percent';
+    const isPercentage = isPercentageVariable(selectedVariable);
     const isCurrency = isCurrencyVariable(selectedVariable);
+    const isZordi = selectedVariable?.key?.toLowerCase().includes('zordi') || false;
     
     // Add new ZIP boundaries with generated IDs and colors
     const zipDataWithValues = {
@@ -1604,6 +1675,7 @@ export default function MapView() {
             color: dataPoint?.value !== undefined ? getColorForValue(dataPoint.value, min, max) : '#e5e7eb',
             isPercentage: isPercentage,
             isCurrency: isCurrency,
+            isZordi: isZordi,
             variableName: selectedVariable?.name || ''
           }
         };
@@ -1619,8 +1691,7 @@ export default function MapView() {
       }))
     };
     
-    console.log('ZIP data processed, sample feature:', zipDataWithValues.features[0]);
-    console.log('Total features with geometry:', zipDataWithValues.features.filter((f: any) => f.geometry !== null).length);
+    // ZIP data processed
     
     const geoJsonData = zipData.features ? zipDataWithValues : {
       type: 'FeatureCollection',
@@ -1633,7 +1704,7 @@ export default function MapView() {
         data: geoJsonData,
         generateId: true
       });
-      console.log('ZIP source added successfully');
+      // ZIP source added
     } catch (error) {
       console.error('Error adding ZIP source:', error);
       return;
@@ -1719,8 +1790,19 @@ export default function MapView() {
             // Has value - show it
             [
               'case',
+              ['get', 'isZordi'],
+              // ZORDI format: already a percentage, show as whole number
+              [
+                'concat',
+                [
+                  'number-format',
+                  ['round', ['get', 'value']],
+                  { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
+                ],
+                '%'
+              ],
               ['get', 'isPercentage'],
-              // Percentage format
+              // Percentage format (multiply by 100 for non-ZORDI)
               [
                 'concat',
                 [
@@ -1885,7 +1967,7 @@ export default function MapView() {
     const map = mapRef.current.getMap();
     
     let currentHoveredId: string | number | null = null;
-    let currentHoveredType: 'state' | 'metro' | 'county' | 'zip' | null = null;
+    let currentHoveredType: 'state' | 'metro' | 'county' | 'zip' | 'national' | null = null;
     let debounceTimer: NodeJS.Timeout | null = null;
     
     const handleMouseMove = (e: any) => {
@@ -1893,7 +1975,9 @@ export default function MapView() {
       let layerId = '';
       
       // Determine which layer to query based on zoom level
-      if ((geoLevel === 'national' || geoLevel === 'state') && stateData) {
+      if (geoLevel === 'national' && nationalData) {
+        layerId = 'state-fill';  // Using state-fill source for national boundary
+      } else if (geoLevel === 'state' && stateData) {
         layerId = 'state-fill';
       } else if (geoLevel === 'metro' && metroData) {
         layerId = 'metro-fill';
@@ -1912,7 +1996,7 @@ export default function MapView() {
       // Clear previous hover
       if (currentHoveredId !== null && currentHoveredType) {
         try {
-          if (currentHoveredType === 'state') {
+          if (currentHoveredType === 'state' || currentHoveredType === 'national') {
             map.setFeatureState(
               { source: 'state-boundaries', id: currentHoveredId },
               { hover: false }
@@ -1947,7 +2031,15 @@ export default function MapView() {
           map.getCanvas().style.cursor = 'pointer';
           
           try {
-            if (geoLevel === 'national' || geoLevel === 'state') {
+            if (geoLevel === 'national') {
+              // At national level, highlight the entire country (single feature)
+              map.setFeatureState(
+                { source: 'state-boundaries', id: featureId },
+                { hover: true }
+              );
+              currentHoveredId = featureId;
+              currentHoveredType = 'national';
+            } else if (geoLevel === 'state') {
               map.setFeatureState(
                 { source: 'state-boundaries', id: featureId },
                 { hover: true }
@@ -1990,7 +2082,7 @@ export default function MapView() {
     const handleMouseLeave = () => {
       if (currentHoveredId !== null && currentHoveredType) {
         try {
-          if (currentHoveredType === 'state') {
+          if (currentHoveredType === 'state' || currentHoveredType === 'national') {
             map.setFeatureState(
               { source: 'state-boundaries', id: currentHoveredId },
               { hover: false }
@@ -2068,10 +2160,10 @@ export default function MapView() {
         autocomplete.addListener('place_changed', async () => {
           const place = autocomplete.getPlace();
           
-          console.log('Place selected:', place);
+          // Place selected
           
           if (!place?.address_components || !place.geometry?.location) {
-            console.log('Missing address components or geometry');
+            // Missing address components or geometry
             return;
           }
 
@@ -2108,11 +2200,11 @@ export default function MapView() {
             }
           }
 
-          console.log('Extracted data:', { county, city, state, stateFullName, zipCode, hasStreetNumber, hasRoute });
+          // Extracted location data
 
           // Reject if it looks like a street address (has street number AND route)
           if (hasStreetNumber && hasRoute) {
-            console.log('Ignoring street address');
+            // Ignoring street address
             return;
           }
 
@@ -2121,7 +2213,7 @@ export default function MapView() {
 
           // Accept if we have state, county, city, or ZIP code data
           if (!stateFullName && !county && !city && !zipCode) {
-            console.log('No valid location data found');
+            // No valid location data found
             return;
           }
 
@@ -2146,19 +2238,12 @@ export default function MapView() {
             displayName = stateFullName;
           }
 
-          console.log('Flying to:', {
-            lat: place.geometry.location.lat(),
-            lng: place.geometry.location.lng(),
-            zoom,
-            displayName
-          });
-
           // Update search query display
           setLocationSearchQuery(displayName);
 
           // Fly to the selected location
           if (mapRef.current) {
-            console.log('MapRef exists, calling flyTo');
+            // Flying to location
             const map = mapRef.current;
             
             map.flyTo({
@@ -2169,7 +2254,7 @@ export default function MapView() {
             
             // Force map to update after flyTo completes
             map.once('moveend', () => {
-              console.log('FlyTo completed, triggering resize');
+              // FlyTo completed
               map.resize();
               map.triggerRepaint();
             });
@@ -2193,10 +2278,9 @@ export default function MapView() {
   }, []);
 
   // Handle map click
-  const handleMapClick = async (event: any) => {
+  const handleMapClick = async (_event: any) => {
     // Map click handler - currently not used for heat map
     // Can be used later for showing details on click
-    console.log('Map clicked', event.lngLat);
   };
 
   const handleMapMouseMove = (event: any) => {
@@ -2208,9 +2292,47 @@ export default function MapView() {
     const map = mapRef.current.getMap();
     const geoLevel = getGeoLevel(viewState.zoom);
     
+    // At national level, show a single tooltip for the entire country, not individual states
+    if (geoLevel === 'national') {
+      // Check if mouse is actually over the national boundary
+      if (!map.getLayer('state-fill')) {
+        setHoveredFeature(null);
+        return;
+      }
+      
+      const features = map.queryRenderedFeatures(event.point, {
+        layers: ['state-fill']
+      });
+      
+      // Only show tooltip if mouse is over the national boundary feature
+      if (features.length > 0) {
+        // Get national data from metricData
+        const nationalObs = metricData.find(obs => {
+          const geoEntity = Array.isArray(obs.geo_entity) ? obs.geo_entity[0] : obs.geo_entity;
+          return geoEntity?.geo_level === 'national' || geoEntity?.geo_level === 'country';
+        });
+        
+        if (nationalObs) {
+          setHoveredFeature({
+            name: 'United States',
+            value: nationalObs.value,
+            date: nationalObs.date,
+            x: event.point.x,
+            y: event.point.y
+          });
+        } else {
+          setHoveredFeature(null);
+        }
+      } else {
+        // Mouse is not over the national boundary
+        setHoveredFeature(null);
+      }
+      return;
+    }
+    
     // Determine which layer to query based on current zoom level
     let layerToQuery: string;
-    if (geoLevel === 'national' || geoLevel === 'state') {
+    if (geoLevel === 'state') {
       layerToQuery = 'state-fill';
     } else if (geoLevel === 'metro') {
       layerToQuery = 'metro-fill';
@@ -2218,6 +2340,12 @@ export default function MapView() {
       layerToQuery = 'county-fill';
     } else {
       layerToQuery = 'zip-fill';
+    }
+    
+    // Check if the layer exists before querying
+    if (!map.getLayer(layerToQuery)) {
+      setHoveredFeature(null);
+      return;
     }
     
     // Only query the layer that exists at this zoom level
@@ -2253,7 +2381,7 @@ export default function MapView() {
 
   // Group database variables by category
   const groupedDatabaseVariables = databaseVariables.reduce((acc, variable) => {
-    const category = variable.description || 'Other';
+    const category = variable.category || 'Other';
     if (!acc[category]) {
       acc[category] = [];
     }
@@ -2364,7 +2492,7 @@ export default function MapView() {
                                 >
                                   <div className="flex items-center justify-between gap-2">
                                     <span className="text-sm text-gray-700 dark:text-gray-300 flex-1">{variable.name}</span>
-                                    {variable.key && variableDescriptions[variable.key] && (
+                                    {variable.description && (
                                       <div
                                         onMouseEnter={(e) => {
                                           e.stopPropagation();
@@ -2409,9 +2537,10 @@ export default function MapView() {
           {/* Tooltip Portal - rendered outside dropdown */}
           {hoveredVariable && tooltipPosition && (() => {
             const variable = databaseVariables.find(v => v.id === hoveredVariable);
-            if (!variable || !variable.key || !variableDescriptions[variable.key]) return null;
+            if (!variable || !variable.description) return null;
             
             const source = variable.key ? (variableSources[variable.key] || 'Realtor.com') : 'Realtor.com';
+            const geoLevels = variable.key ? variableGeoLevels[variable.key] : null;
             
             return (
               <div 
@@ -2425,15 +2554,20 @@ export default function MapView() {
               >
                 <div className="absolute -left-2 top-1/2 -translate-y-1/2 w-0 h-0 border-t-8 border-t-transparent border-b-8 border-b-transparent border-r-8 border-r-white/85 dark:border-r-gray-800/85"></div>
                 <div className="font-semibold mb-1 text-gray-900 dark:text-gray-100">{variable.name}</div>
-                <div className="text-gray-700 dark:text-gray-300 mb-2">{variableDescriptions[variable.key]}</div>
+                <div className="text-gray-700 dark:text-gray-300 mb-2">{variable.description}</div>
                 <div className="text-gray-600 dark:text-gray-400 text-[10px] italic">Source: {source}</div>
+                {geoLevels && (
+                  <div className="text-gray-600 dark:text-gray-400 text-[10px] mt-1">
+                    <span className="font-semibold">Available levels:</span> {geoLevels}
+                  </div>
+                )}
               </div>
             );
           })()}
 
           {/* Loading/Status Indicators */}
           {(loadingStates || loadingZips || loadingCounties || loadingMetros || loadingNational || loadingMetricData) && (
-            <div className="absolute top-24 left-1/2 -translate-x-1/2 z-10 bg-white/60 dark:bg-gray-800/60 backdrop-blur-md px-4 py-2 rounded-lg shadow-lg border border-gray-200/50 dark:border-gray-700/50 flex items-center gap-2">
+            <div className="absolute top-40 left-1/2 -translate-x-1/2 z-10 bg-white/60 dark:bg-gray-800/60 backdrop-blur-md px-4 py-2 rounded-lg shadow-lg border border-gray-200/50 dark:border-gray-700/50 flex items-center gap-2">
               <Loader2 className="w-4 h-4 animate-spin text-brand-500" />
               <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 {loadingMetricData ? 'Loading data...' : loadingNational ? 'Loading national boundaries...' : loadingStates ? 'Loading state boundaries...' : loadingMetros ? 'Loading metro areas...' : loadingZips ? 'Loading ZIP boundaries...' : loadingCounties ? 'Loading county boundaries...' : 'Loading...'}
@@ -2443,7 +2577,7 @@ export default function MapView() {
           
           {/* Metro data not available message */}
           {getGeoLevel(viewState.zoom) === 'metro' && !metroData && !loadingMetros && (
-            <div className="absolute top-24 left-1/2 -translate-x-1/2 z-10 bg-yellow-50/60 dark:bg-yellow-900/60 backdrop-blur-md px-4 py-2 rounded-lg shadow-lg border border-yellow-200/50 dark:border-yellow-700/50 text-center">
+            <div className="absolute top-40 left-1/2 -translate-x-1/2 z-10 bg-yellow-50/60 dark:bg-yellow-900/60 backdrop-blur-md px-4 py-2 rounded-lg shadow-lg border border-yellow-200/50 dark:border-yellow-700/50 text-center">
               <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
                 Metro area data not available
               </p>
@@ -2486,14 +2620,19 @@ export default function MapView() {
           
           {/* Color Legend - Bottom Right */}
           {selectedVariable && metricData.length > 0 && (() => {
-            const { min, max } = getValueRange();
+            const { min, max, actualMin, actualMax } = getValueRange();
             if (min === 0 && max === 0) return null;
             
-            const isPercentage = selectedVariable?.value_type === 'percent';
+            const isPercentage = isPercentageVariable(selectedVariable);
             const isCurrency = isCurrencyVariable(selectedVariable);
+            const isZordi = selectedVariable.key?.toLowerCase().includes('zordi') || false;
             
             const formatValue = (val: number) => {
               if (isPercentage) {
+                if (isZordi) {
+                  // ZORDI values are already percentages, just format as whole number
+                  return `${Math.round(val)}%`;
+                }
                 return `${(val * 100).toFixed(2)}%`;
               }
               if (isCurrency) {
@@ -2506,11 +2645,11 @@ export default function MapView() {
               <div className="absolute bottom-8 right-4 z-20">
                 <div className="bg-white/60 dark:bg-gray-800/60 backdrop-blur-md rounded-lg border border-gray-200/50 dark:border-gray-700/50 shadow-lg p-3">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-600 dark:text-gray-400">{formatValue(min)}</span>
+                    <span className="text-xs text-gray-600 dark:text-gray-400">{formatValue(actualMin)}</span>
                     <div className="w-32 h-3 rounded" style={{
-                      background: 'linear-gradient(to right, rgb(96, 165, 250), rgb(250, 240, 230), rgb(248, 113, 113))'
+                      background: 'linear-gradient(to right, rgb(59, 130, 246), rgb(147, 197, 253), rgb(255, 255, 255), rgb(252, 165, 165), rgb(239, 68, 68))'
                     }}></div>
-                    <span className="text-xs text-gray-600 dark:text-gray-400">{formatValue(max)}</span>
+                    <span className="text-xs text-gray-600 dark:text-gray-400">{formatValue(actualMax)}</span>
                   </div>
                 </div>
               </div>
@@ -2519,21 +2658,18 @@ export default function MapView() {
 
           {/* Hover Tooltip */}
           {showTooltip && hoveredFeature && selectedVariable && (() => {
-            const isPercentage = selectedVariable?.value_type === 'percent';
+            const isPercentage = isPercentageVariable(selectedVariable);
             const isCurrency = isCurrencyVariable(selectedVariable);
-            const description = selectedVariable.key ? variableDescriptions[selectedVariable.key] : '';
+            const description = selectedVariable.description || '';
             const source = selectedVariable.key ? (variableSources[selectedVariable.key] || 'Realtor.com') : 'Realtor.com';
-            
-            console.log('Tooltip data:', { 
-              key: selectedVariable.key, 
-              description, 
-              hasDescription: !!description,
-              source,
-              date: hoveredFeature.date
-            });
+            const isZordi = selectedVariable.key?.toLowerCase().includes('zordi') || false;
             
             const formatValue = (val: number) => {
               if (isPercentage) {
+                if (isZordi) {
+                  // ZORDI values are already percentages, just format as whole number
+                  return `${Math.round(val)}%`;
+                }
                 return `${(val * 100).toFixed(2)}%`;
               }
               if (isCurrency) {
