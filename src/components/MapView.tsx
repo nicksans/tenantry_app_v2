@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { ChevronDown, ChevronUp, Loader2, Info, Search } from 'lucide-react';
 import { Map as MapGL, NavigationControl } from 'react-map-gl';
 import type { MapRef } from 'react-map-gl';
@@ -50,6 +50,13 @@ export default function MapView() {
   // Track last loaded bounds for ZIP codes
   const lastZipBoundsRef = useRef<{ west: number; east: number; south: number; north: number } | null>(null);
   
+  // Track which geo levels are currently being fetched to prevent duplicate fetches
+  const fetchingGeoLevelsRef = useRef<Set<string>>(new Set());
+  
+  // Track last rendered variable for county/zip layers to know when to use setData() vs full re-render
+  const lastRenderedCountyVariableRef = useRef<string | null>(null);
+  const lastRenderedZipVariableRef = useRef<string | null>(null);
+  
   // Tooltip state
   const [hoveredFeature, setHoveredFeature] = useState<{
     name: string;
@@ -68,7 +75,12 @@ export default function MapView() {
   // New state for database variables and metric data
   const [databaseVariables, setDatabaseVariables] = useState<Variable[]>([]);
   const [loadingVariables, setLoadingVariables] = useState(false);
-  const [metricData, setMetricData] = useState<MetricObservation[]>([]);
+  
+  // Cache metric data by geo level for faster switching between zoom levels
+  // Keys can be: 'national', 'state', 'metro', 'county', 'zip'
+  // Or for viewport filtering: 'county_CA-NV', 'zip_CA-OR-WA', etc.
+  const [metricDataCache, setMetricDataCache] = useState<Record<string, MetricObservation[]>>({});
+  
   const [loadingMetricData, setLoadingMetricData] = useState(false);
   
   // Hover tooltip state
@@ -118,6 +130,130 @@ export default function MapView() {
     return 'zip';
   };
 
+  // Memoize the current geo level so render effects only run when level CHANGES
+  // This prevents the "flash" when zooming within the same level
+  const currentGeoLevel = useMemo(() => getGeoLevel(viewState.zoom), [viewState.zoom]);
+
+  // Determine which states are visible in the current viewport
+  // This helps filter data queries to only load visible regions
+  const getStatesInViewport = (): string[] => {
+    if (!mapRef.current) return [];
+    
+    try {
+      const map = mapRef.current.getMap();
+      const bounds = map.getBounds();
+      
+      // State boundaries (simplified - covers continental US regions)
+      // This is a simplified approach - for production you might want a more precise lookup
+      const stateBounds: Record<string, { minLat: number; maxLat: number; minLng: number; maxLng: number; abbr: string }> = {
+        // West Coast
+        'CA': { minLat: 32.5, maxLat: 42, minLng: -124.5, maxLng: -114, abbr: 'CA' },
+        'OR': { minLat: 42, maxLat: 46, minLng: -124.5, maxLng: -116.5, abbr: 'OR' },
+        'WA': { minLat: 45.5, maxLat: 49, minLng: -124.5, maxLng: -116.5, abbr: 'WA' },
+        // Southwest
+        'AZ': { minLat: 31, maxLat: 37, minLng: -114.8, maxLng: -109, abbr: 'AZ' },
+        'NV': { minLat: 35, maxLat: 42, minLng: -120, maxLng: -114, abbr: 'NV' },
+        'NM': { minLat: 31.3, maxLat: 37, minLng: -109, maxLng: -103, abbr: 'NM' },
+        'UT': { minLat: 37, maxLat: 42, minLng: -114, maxLng: -109, abbr: 'UT' },
+        'CO': { minLat: 37, maxLat: 41, minLng: -109, maxLng: -102, abbr: 'CO' },
+        // South
+        'TX': { minLat: 25.8, maxLat: 36.5, minLng: -106.6, maxLng: -93.5, abbr: 'TX' },
+        'OK': { minLat: 33.6, maxLat: 37, minLng: -103, maxLng: -94.4, abbr: 'OK' },
+        'LA': { minLat: 28.9, maxLat: 33, minLng: -94, maxLng: -88.8, abbr: 'LA' },
+        'AR': { minLat: 33, maxLat: 36.5, minLng: -94.6, maxLng: -89.6, abbr: 'AR' },
+        'MS': { minLat: 30.2, maxLat: 35, minLng: -91.7, maxLng: -88.1, abbr: 'MS' },
+        'AL': { minLat: 30.2, maxLat: 35, minLng: -88.5, maxLng: -84.9, abbr: 'AL' },
+        'FL': { minLat: 24.5, maxLat: 31, minLng: -87.6, maxLng: -80, abbr: 'FL' },
+        'GA': { minLat: 30.4, maxLat: 35, minLng: -85.6, maxLng: -80.8, abbr: 'GA' },
+        // Midwest
+        'MN': { minLat: 43.5, maxLat: 49, minLng: -97.2, maxLng: -89.5, abbr: 'MN' },
+        'WI': { minLat: 42.5, maxLat: 47, minLng: -92.9, maxLng: -86.8, abbr: 'WI' },
+        'MI': { minLat: 41.7, maxLat: 48.2, minLng: -90.4, maxLng: -82.4, abbr: 'MI' },
+        'IL': { minLat: 37, maxLat: 42.5, minLng: -91.5, maxLng: -87.5, abbr: 'IL' },
+        'IN': { minLat: 37.8, maxLat: 41.8, minLng: -88, maxLng: -84.8, abbr: 'IN' },
+        'OH': { minLat: 38.4, maxLat: 42, minLng: -84.8, maxLng: -80.5, abbr: 'OH' },
+        'IA': { minLat: 40.4, maxLat: 43.5, minLng: -96.6, maxLng: -90.1, abbr: 'IA' },
+        'MO': { minLat: 36, maxLat: 40.6, minLng: -95.8, maxLng: -89.1, abbr: 'MO' },
+        'KS': { minLat: 37, maxLat: 40, minLng: -102, maxLng: -94.6, abbr: 'KS' },
+        'NE': { minLat: 40, maxLat: 43, minLng: -104, maxLng: -95.3, abbr: 'NE' },
+        'SD': { minLat: 42.5, maxLat: 45.9, minLng: -104.1, maxLng: -96.4, abbr: 'SD' },
+        'ND': { minLat: 45.9, maxLat: 49, minLng: -104.1, maxLng: -96.6, abbr: 'ND' },
+        // East Coast
+        'NY': { minLat: 40.5, maxLat: 45, minLng: -79.8, maxLng: -71.9, abbr: 'NY' },
+        'PA': { minLat: 39.7, maxLat: 42, minLng: -80.5, maxLng: -74.7, abbr: 'PA' },
+        'NJ': { minLat: 38.9, maxLat: 41.4, minLng: -75.6, maxLng: -73.9, abbr: 'NJ' },
+        'MA': { minLat: 41.2, maxLat: 42.9, minLng: -73.5, maxLng: -69.9, abbr: 'MA' },
+        'CT': { minLat: 40.9, maxLat: 42.1, minLng: -73.7, maxLng: -71.8, abbr: 'CT' },
+        'RI': { minLat: 41.1, maxLat: 42.1, minLng: -71.9, maxLng: -71.1, abbr: 'RI' },
+        'VT': { minLat: 42.7, maxLat: 45, minLng: -73.4, maxLng: -71.5, abbr: 'VT' },
+        'NH': { minLat: 42.7, maxLat: 45.3, minLng: -72.6, maxLng: -70.6, abbr: 'NH' },
+        'ME': { minLat: 43, maxLat: 47.5, minLng: -71.1, maxLng: -66.9, abbr: 'ME' },
+        'MD': { minLat: 37.9, maxLat: 39.7, minLng: -79.5, maxLng: -75, abbr: 'MD' },
+        'DE': { minLat: 38.5, maxLat: 39.8, minLng: -75.8, maxLng: -75, abbr: 'DE' },
+        'VA': { minLat: 36.5, maxLat: 39.5, minLng: -83.7, maxLng: -75.2, abbr: 'VA' },
+        'WV': { minLat: 37.2, maxLat: 40.6, minLng: -82.6, maxLng: -77.7, abbr: 'WV' },
+        'NC': { minLat: 33.8, maxLat: 36.6, minLng: -84.3, maxLng: -75.4, abbr: 'NC' },
+        'SC': { minLat: 32, maxLat: 35.2, minLng: -83.4, maxLng: -78.5, abbr: 'SC' },
+        'KY': { minLat: 36.5, maxLat: 39.1, minLng: -89.6, maxLng: -81.9, abbr: 'KY' },
+        'TN': { minLat: 35, maxLat: 36.7, minLng: -90.3, maxLng: -81.6, abbr: 'TN' },
+        // Mountain States
+        'MT': { minLat: 44.4, maxLat: 49, minLng: -116, maxLng: -104, abbr: 'MT' },
+        'WY': { minLat: 41, maxLat: 45, minLng: -111.1, maxLng: -104, abbr: 'WY' },
+        'ID': { minLat: 42, maxLat: 49, minLng: -117, maxLng: -111, abbr: 'ID' },
+        // DC
+        'DC': { minLat: 38.8, maxLat: 39, minLng: -77.1, maxLng: -76.9, abbr: 'DC' },
+      };
+      
+      const visibleStates: string[] = [];
+      const sw = bounds.getSouthWest();
+      const ne = bounds.getNorthEast();
+      
+      // Check which states intersect with the viewport
+      for (const [_stateName, stateBound] of Object.entries(stateBounds)) {
+        // Check if viewport and state bounds overlap
+        const overlaps = !(
+          sw.lng > stateBound.maxLng || 
+          ne.lng < stateBound.minLng ||
+          sw.lat > stateBound.maxLat ||
+          ne.lat < stateBound.minLat
+        );
+        
+        if (overlaps) {
+          visibleStates.push(stateBound.abbr);
+        }
+      }
+      
+      console.log(`🗺️  Viewport contains ${visibleStates.length} states:`, visibleStates.join(', '));
+      return visibleStates;
+      
+    } catch (error) {
+      console.error('Error determining states in viewport:', error);
+      return []; // Return empty array to load all data as fallback
+    }
+  };
+
+  // Stable empty array to prevent unnecessary re-renders
+  const EMPTY_METRIC_DATA: MetricObservation[] = useMemo(() => [], []);
+  
+  // Compute current metricData based on zoom level and viewport from cache
+  const metricData = useMemo(() => {
+    const geoLevel = getGeoLevel(viewState.zoom);
+    
+    // For county/zip, try to find cache with current viewport states
+    if (geoLevel === 'county' || geoLevel === 'zip') {
+      const visibleStates = getStatesInViewport();
+      if (visibleStates.length > 0) {
+        const cacheKey = `${geoLevel}_${visibleStates.sort().join('-')}`;
+        if (metricDataCache[cacheKey]) {
+          return metricDataCache[cacheKey];
+        }
+      }
+    }
+    
+    // Fallback to simple geo level lookup - use stable empty array to prevent re-renders
+    return metricDataCache[geoLevel] || EMPTY_METRIC_DATA;
+  }, [metricDataCache, viewState.zoom, viewState.latitude, viewState.longitude, EMPTY_METRIC_DATA]);
+
   // Fetch all variables from database on mount
   useEffect(() => {
     const fetchVariables = async () => {
@@ -153,14 +289,50 @@ export default function MapView() {
     fetchVariables();
   }, []);
 
-  // Fetch metric data when variable is selected
+  // Clear cache whenever variable changes (including switching between variables)
+  useEffect(() => {
+    // Clear cache on any variable change
+    setMetricDataCache({});
+    // Also clear the fetching flags
+    fetchingGeoLevelsRef.current.clear();
+  }, [selectedVariable?.id]);
+
+  // Fetch metric data for current geo level based on zoom and viewport
   useEffect(() => {
     if (!selectedVariable || !selectedVariable.id) {
-      setMetricData([]);
       return;
     }
 
-    const fetchMetricData = async () => {
+    const currentGeoLevel = getGeoLevel(viewState.zoom);
+    
+    // For county/zip, create cache key with visible states
+    // For other levels, just use the geo level
+    let cacheKey: string = currentGeoLevel;
+    let visibleStatesForCache: string[] = [];
+    
+    if (currentGeoLevel === 'county' || currentGeoLevel === 'zip') {
+      visibleStatesForCache = getStatesInViewport();
+      if (visibleStatesForCache.length > 0) {
+        // Sort states for consistent cache keys
+        cacheKey = `${currentGeoLevel}_${visibleStatesForCache.sort().join('-')}`;
+      }
+    }
+    
+    // Skip if we already have data for this level/region
+    if (metricDataCache[cacheKey]?.length > 0) {
+      console.log(`✅ Using cached data for ${currentGeoLevel} level (${metricDataCache[cacheKey].length} rows)`);
+      return;
+    }
+    
+    // Skip if we're already fetching this level/region
+    if (fetchingGeoLevelsRef.current.has(cacheKey)) {
+      console.log(`⏳ Already fetching ${currentGeoLevel} level data, skipping...`);
+      return;
+    }
+
+    const fetchMetricDataForLevel = async (geoLevel: string, statesFilter: string[], cachingKey: string) => {
+      // Mark as fetching
+      fetchingGeoLevelsRef.current.add(cachingKey);
       setLoadingMetricData(true);
       
       try {
@@ -169,7 +341,7 @@ export default function MapView() {
         
         // First, get the most recent date for this variable
         const { data: dateData, error: dateError } = await supabase
-          .from('metric_observations')
+          .from('metric_observations_with_geo')
           .select('date')
           .eq('variable_id', selectedVariable.id)
           .order('date', { ascending: false })
@@ -177,45 +349,165 @@ export default function MapView() {
         
         if (dateError) throw dateError;
         if (!dateData || dateData.length === 0) {
-          setMetricData([]);
           setLoadingMetricData(false);
           return;
         }
 
         const mostRecentDate = dateData[0].date;
         
-        // Fetch ALL observations for this variable on that date
+        // Map frontend geo level names to database geo_level values
+        const geoLevelMap: Record<string, string> = {
+          'national': 'country',
+          'state': 'state',
+          'metro': 'msa',
+          'county': 'county',
+          'zip': 'zip'
+        };
+        
+        const dbGeoLevel = geoLevelMap[geoLevel] || geoLevel;
+        
+        console.log(`🔄 Fetching ${geoLevel} level data (db: ${dbGeoLevel}) for ${selectedVariable.name}...`);
+        
+        // Use the states filter passed from the effect
+        if (statesFilter.length > 0) {
+          console.log(`🎯 Filtering ${geoLevel} data to visible states: ${statesFilter.join(', ')}`);
+        }
+        
+        // First, try to use the view if it exists, otherwise fall back to the table with join
+        // Try a test query to see what columns the view has
+        const { data: testData, error: viewCheckError } = await supabase
+          .from('metric_observations_with_geo')
+          .select('*')
+          .limit(1);
+        
+        const useView = !viewCheckError;
+        
+        if (!useView) {
+          console.warn('⚠️  View metric_observations_with_geo does not exist, using table with join (slower)');
+        } else {
+          console.log('✅ Using metric_observations_with_geo view for optimized query');
+          if (testData && testData.length > 0) {
+            console.log('📊 View columns available:', Object.keys(testData[0]));
+          }
+        }
+        
+        // Fetch observations for THIS geo level only
         let allData: any[] = [];
         let fetchMore = true;
         let offset = 0;
         const batchSize = 1000;
         
         while (fetchMore) {
-          const { data: batchData, error } = await supabase
-            .from('metric_observations')
-            .select(`
-              geo_entity_id,
-              variable_id,
-              value,
-              date,
-              ${isZordiVariable ? 'pct_change_prev,' : ''}
-              geo_entity:geo_entities (
-                id,
-                geoid,
+          let batchData, error;
+          
+          if (useView) {
+            // Use the optimized view
+            let query = supabase
+              .from('metric_observations_with_geo')
+              .select(`
+                geo_entity_id,
+                variable_id,
+                value,
+                date,
+                ${isZordiVariable ? 'pct_change_prev,' : ''}
                 geo_level,
-                name,
+                geoid,
+                geo_name,
                 state_abbr,
                 county_fips,
                 cbsa_code,
                 zcta
-              )
-            `)
-            .eq('variable_id', selectedVariable.id)
-            .eq('date', mostRecentDate)
-            .order('geo_entity_id')
-            .range(offset, offset + batchSize - 1);
+              `)
+              .eq('variable_id', selectedVariable.id)
+              .eq('date', mostRecentDate)
+              .eq('geo_level', dbGeoLevel);  // 🔥 KEY FILTER: Only get this geo level
+            
+            // 🎯 VIEWPORT FILTER: Add state filter for county/zip levels
+            if (statesFilter.length > 0) {
+              query = query.in('state_abbr', statesFilter);
+              console.log(`✅ Applied state filter: ${statesFilter.join(', ')}`);
+              
+              // For ZIP level, also exclude rows where state_abbr is null (~1,547 ZCTAs)
+              if (geoLevel === 'zip') {
+                query = query.not('state_abbr', 'is', null);
+                console.log(`✅ Excluding ZIPs with null state_abbr`);
+              }
+            }
+            
+            query = query
+              .order('geo_entity_id')
+              .range(offset, offset + batchSize - 1);
+            
+            const result = await query;
+            batchData = result.data;
+            error = result.error;
+          } else {
+            // Fallback to table with join - fetch all and filter in JS (temporary until view is created)
+            const result = await supabase
+              .from('metric_observations')
+              .select(`
+                geo_entity_id,
+                variable_id,
+                value,
+                date,
+                ${isZordiVariable ? 'pct_change_prev,' : ''}
+                geo_entity:geo_entities (
+                  id,
+                  geoid,
+                  geo_level,
+                  name,
+                  state_abbr,
+                  county_fips,
+                  cbsa_code,
+                  zcta
+                )
+              `)
+              .eq('variable_id', selectedVariable.id)
+              .eq('date', mostRecentDate)
+              .order('geo_entity_id')
+              .range(offset, offset + batchSize - 1);
+            
+            batchData = result.data;
+            error = result.error;
+            
+            // Filter by geo level in JavaScript (not ideal but works until view is created)
+            if (batchData) {
+              batchData = batchData.filter((obs: any) => {
+                const geoEntity = Array.isArray(obs.geo_entity) ? obs.geo_entity[0] : obs.geo_entity;
+                if (!geoEntity) return false;
+                let entityGeoLevel = geoEntity.geo_level;
+                if (entityGeoLevel === 'msa') entityGeoLevel = 'metro';
+                if (entityGeoLevel === 'country') entityGeoLevel = 'national';
+                return entityGeoLevel === geoLevel;
+              });
+              
+              // Transform to flat structure for consistency
+              batchData = batchData.map((obs: any) => {
+                const geoEntity = Array.isArray(obs.geo_entity) ? obs.geo_entity[0] : obs.geo_entity;
+                return {
+                  geo_entity_id: obs.geo_entity_id,
+                  variable_id: obs.variable_id,
+                  value: obs.value,
+                  date: obs.date,
+                  pct_change_prev: obs.pct_change_prev,
+                  geo_level: geoEntity.geo_level,
+                  geoid: geoEntity.geoid,
+                  geo_name: geoEntity.name,
+                  state_abbr: geoEntity.state_abbr,
+                  county_fips: geoEntity.county_fips,
+                  cbsa_code: geoEntity.cbsa_code,
+                  zcta: geoEntity.zcta
+                };
+              });
+            }
+          }
           
-          if (error) throw error;
+          if (error) {
+            console.error('❌ Error fetching metric data:', error);
+            console.error('❌ Error details:', JSON.stringify(error, null, 2));
+            console.error('❌ Query was for:', { variable_id: selectedVariable.id, date: mostRecentDate, geo_level: dbGeoLevel });
+            throw error;
+          }
           
           if (batchData && batchData.length > 0) {
             allData = allData.concat(batchData);
@@ -226,9 +518,29 @@ export default function MapView() {
           }
         }
         
+        // Transform data to match the old structure (nest geo fields under geo_entity)
+        const transformedData = allData.map(obs => ({
+          geo_entity_id: obs.geo_entity_id,
+          variable_id: obs.variable_id,
+          value: obs.value,
+          date: obs.date,
+          pct_change_prev: obs.pct_change_prev,
+          geo_entity: {
+            id: obs.geo_entity_id,
+            geoid: obs.geoid,
+            geo_level: obs.geo_level,
+            name: obs.geo_name || obs.name,  // Handle both column names
+            state_abbr: obs.state_abbr,
+            county_fips: obs.county_fips,
+            cbsa_code: obs.cbsa_code,
+            zcta: obs.zcta
+          }
+        }));
+        
         // For ZORDI variables, use pct_change_prev as the value (multiply by 100 since it's stored as decimal)
+        let finalData = transformedData;
         if (isZordiVariable) {
-          allData = allData.map(obs => ({
+          finalData = transformedData.map(obs => ({
             ...obs,
             value: obs.pct_change_prev !== null && obs.pct_change_prev !== undefined 
               ? obs.pct_change_prev * 100  // Convert from decimal to percentage (e.g., -0.115 -> -11.5)
@@ -236,21 +548,31 @@ export default function MapView() {
           }));
         }
         
-        const data = allData;
+        console.log(`✅ Loaded ${finalData.length} observations for ${geoLevel} level (${selectedVariable.name})`);
         
-        console.log(`📊 Loaded ${data.length} observations for ${selectedVariable.name} (${selectedVariable.key})`);
+        // Update cache for this specific geo level/region
+        setMetricDataCache(prev => ({
+          ...prev,
+          [cachingKey]: finalData as any
+        }));
         
-        setMetricData(data as any || []);
       } catch (error) {
-        console.error('Error fetching metric data:', error);
-        setMetricData([]);
+        console.error('Error in fetchMetricDataForLevel:', error);
       } finally {
+        // Remove from fetching set
+        fetchingGeoLevelsRef.current.delete(cachingKey);
         setLoadingMetricData(false);
       }
     };
 
-    fetchMetricData();
-  }, [selectedVariable]);
+    fetchMetricDataForLevel(currentGeoLevel, visibleStatesForCache, cacheKey);
+  }, [
+    selectedVariable?.id, 
+    viewState.zoom, 
+    viewState.latitude, 
+    viewState.longitude,
+    metricDataCache  // Re-run when cache is cleared to fetch new data
+  ]); // Trigger on zoom, viewport changes (panning), or cache changes
 
   // Calculate color scale for heat map
   // Helper to determine if a variable should be displayed as currency
@@ -371,8 +693,8 @@ export default function MapView() {
         // ALWAYS use CBSA code for metro matching - normalize to string and trim
         key = geoEntity.cbsa_code?.toString().trim();
       } else if (geoLevel === 'county') {
-        // Use county_fips directly (it already has 'county:' prefix in database)
-        key = geoEntity.county_fips || geoEntity.geoid;
+        // Use 5-digit county_fips (standardized format)
+        key = geoEntity.county_fips;
       } else if (geoLevel === 'zip') {
         key = geoEntity.zcta; // Match by ZCTA
       }
@@ -728,16 +1050,14 @@ export default function MapView() {
 
   // Render state or national boundaries on the map
   useEffect(() => {
-    const geoLevel = getGeoLevel(viewState.zoom);
-    
     // For national level, we need nationalData; for state level, we need stateData
-    const requiredData = geoLevel === 'national' ? nationalData : stateData;
+    const requiredData = currentGeoLevel === 'national' ? nationalData : stateData;
     if (!mapRef.current || !mapLoaded || !requiredData) return;
     
     const map = mapRef.current.getMap();
     
     // Skip rendering if we're not at the right level
-    if (geoLevel !== 'state' && geoLevel !== 'national') {
+    if (currentGeoLevel !== 'state' && currentGeoLevel !== 'national') {
       // Remove layers if we're not at the right level
       if (map.getLayer('state-fill')) {
         map.removeLayer('state-fill');
@@ -787,7 +1107,7 @@ export default function MapView() {
     
     let dataToRender;
     
-    if (geoLevel === 'national') {
+    if (currentGeoLevel === 'national') {
       // National level: use the us-nation.json file
       const nationalValue = valueMap.get('__national__');
       
@@ -845,7 +1165,7 @@ export default function MapView() {
     // Create a separate deduplicated source for labels only
     let labelFeatures;
     
-    if (geoLevel === 'national') {
+    if (currentGeoLevel === 'national') {
       // For national level, show only one label in the center of the US
       const firstFeature = dataToRender.features[0];
       labelFeatures = [{
@@ -933,17 +1253,17 @@ export default function MapView() {
           [
             'case',
             ['has', 'value'],
-            geoLevel === 'national' ? '#4b5563' : '#6b7280', // Darker for national, normal gray for states
+            currentGeoLevel === 'national' ? '#4b5563' : '#6b7280', // Darker for national, normal gray for states
             '#d1d5db' // Light gray for no data
           ]
         ],
         'line-width': [
           'case',
           ['boolean', ['feature-state', 'hover'], false],
-          geoLevel === 'national' ? 5 : 4,  // Extra thick border for hover at national
-          geoLevel === 'national' ? 3 : 2   // Thicker normal border at national
+          currentGeoLevel === 'national' ? 5 : 4,  // Extra thick border for hover at national
+          currentGeoLevel === 'national' ? 3 : 2   // Thicker normal border at national
         ],
-        'line-opacity': geoLevel === 'national' ? 1.0 : 0.8  // Full opacity for national border
+        'line-opacity': currentGeoLevel === 'national' ? 1.0 : 0.8  // Full opacity for national border
       }
     });
     
@@ -1028,7 +1348,7 @@ export default function MapView() {
         'symbol-placement': 'point',
         'symbol-spacing': 100000,
         'text-max-width': 10,
-        'text-allow-overlap': geoLevel === 'national'
+        'text-allow-overlap': currentGeoLevel === 'national'
       },
       paint: {
         'text-color': [
@@ -1064,7 +1384,7 @@ export default function MapView() {
         }
       }
     };
-  }, [stateData, nationalData, mapLoaded, selectedVariable, metricData, viewState.zoom, loadingMetricData]);
+  }, [stateData, nationalData, mapLoaded, selectedVariable, metricData, currentGeoLevel, loadingMetricData]);
 
   // Render county boundaries on the map
   useEffect(() => {
@@ -1073,10 +1393,9 @@ export default function MapView() {
     // Rendering county layer
     
     const map = mapRef.current.getMap();
-    const geoLevel = getGeoLevel(viewState.zoom);
     
     // If we're not at county level, remove layers and return
-    if (geoLevel !== 'county') {
+    if (currentGeoLevel !== 'county') {
       if (map.getLayer('county-fill')) {
         map.removeLayer('county-fill');
       }
@@ -1089,6 +1408,8 @@ export default function MapView() {
       if (map.getSource('county-boundaries')) {
         map.removeSource('county-boundaries');
       }
+      // Reset ref when leaving county level
+      lastRenderedCountyVariableRef.current = null;
       return;
     }
     
@@ -1097,53 +1418,38 @@ export default function MapView() {
       return;
     }
     
-    // Remove old county layers if exist
-    if (map.getLayer('county-fill')) {
-      map.removeLayer('county-fill');
-    }
-    if (map.getLayer('county-boundaries')) {
-      map.removeLayer('county-boundaries');
-    }
-    if (map.getLayer('county-labels')) {
-      map.removeLayer('county-labels');
-    }
-    if (map.getSource('county-boundaries')) {
-      map.removeSource('county-boundaries');
-    }
-    
     const valueMap = createValueMap();
     const { min, max } = getValueRange();
     const isPercentage = isPercentageVariable(selectedVariable);
     const isCurrency = isCurrencyVariable(selectedVariable);
     const isZordi = selectedVariable?.key?.toLowerCase().includes('zordi') || false;
     
-    // DEBUG: Log county matching
-    // County level data matching
-    
     // Add colors to features based on metric data
     let matchCount = 0;
     const countyDataWithValues = {
       ...countyData,
       features: countyData.features.map((feature: any, index: number) => {
-        // Extract FIPS code from GEO_ID (format: '0500000US01001' -> '01001')
+        // Extract 5-digit county FIPS from GeoJSON (STATEFP + COUNTYFP)
         let countyFips = null;
-        if (feature.properties.GEO_ID) {
+        
+        if (feature.properties.STATEFP && feature.properties.COUNTYFP) {
+          // Combine state FIPS + county FIPS to get 5-digit code
+          countyFips = `${feature.properties.STATEFP}${feature.properties.COUNTYFP}`.padStart(5, '0');
+        } else if (feature.properties.GEO_ID) {
+          // Fallback: Extract from Census GEO_ID (format: '0500000US01001' -> '01001')
           countyFips = feature.properties.GEO_ID.replace('0500000US', '');
         } else if (feature.properties.GEOID) {
-          countyFips = feature.properties.GEOID;
-        } else if (feature.properties.geoid) {
-          countyFips = feature.properties.geoid;
-        } else if (feature.properties.FIPS) {
-          countyFips = feature.properties.FIPS;
-        } else if (feature.properties.fips) {
-          countyFips = feature.properties.fips;
+          // If GEOID is already 5-digit format, use it
+          const geoid = String(feature.properties.GEOID);
+          if (geoid.length === 5) {
+            countyFips = geoid;
+          } else if (geoid.startsWith('0500000US')) {
+            countyFips = geoid.replace('0500000US', '');
+          }
         }
         
-        // Try to match with 'county:' prefix
-        let dataPoint = null;
-        if (countyFips) {
-          dataPoint = valueMap.get(`county:${countyFips}`);
-        }
+        // Look up value using 5-digit FIPS (no prefix)
+        const dataPoint = countyFips ? valueMap.get(countyFips) : null;
         
         if (dataPoint) {
           matchCount++;
@@ -1168,6 +1474,45 @@ export default function MapView() {
     
     // County matches calculated
     
+    // Check if we can use the setData() optimization (prevents flash when panning/zooming)
+    // Only use optimization if: source exists AND variable hasn't changed
+    // When variable changes, we need to re-add layers to update paint properties
+    const existingSource = map.getSource('county-boundaries') as mapboxgl.GeoJSONSource;
+    const currentVariableId = selectedVariable?.id || null;
+    const variableChanged = lastRenderedCountyVariableRef.current !== currentVariableId;
+    
+    if (existingSource && !variableChanged) {
+      // Same variable, just update data without removing layers (no flash!)
+      existingSource.setData(countyDataWithValues);
+      
+      // Also update the fill-color paint property in case it was created before metric data loaded
+      // (first render might have used static color if metricData was empty)
+      if (map.getLayer('county-fill')) {
+        map.setPaintProperty('county-fill', 'fill-color', 
+          selectedVariable && metricData.length > 0 ? ['get', 'color'] : '#f3f4f6'
+        );
+      }
+      return;
+    }
+    
+    // Variable changed or source doesn't exist - need to remove old layers and create fresh
+    if (map.getLayer('county-fill')) {
+      map.removeLayer('county-fill');
+    }
+    if (map.getLayer('county-boundaries')) {
+      map.removeLayer('county-boundaries');
+    }
+    if (map.getLayer('county-labels')) {
+      map.removeLayer('county-labels');
+    }
+    if (map.getSource('county-boundaries')) {
+      map.removeSource('county-boundaries');
+    }
+    
+    // Track current variable for future optimization
+    lastRenderedCountyVariableRef.current = currentVariableId;
+    
+    // Create source fresh
     map.addSource('county-boundaries', {
       type: 'geojson',
       data: countyDataWithValues,
@@ -1318,35 +1663,18 @@ export default function MapView() {
       }
     });
     
-    // Cleanup function
-    return () => {
-      if (mapRef.current) {
-        const map = mapRef.current.getMap();
-        if (map.getLayer('county-labels')) {
-          map.removeLayer('county-labels');
-        }
-        if (map.getLayer('county-fill')) {
-          map.removeLayer('county-fill');
-        }
-        if (map.getLayer('county-boundaries')) {
-          map.removeLayer('county-boundaries');
-        }
-        if (map.getSource('county-boundaries')) {
-          map.removeSource('county-boundaries');
-        }
-      }
-    };
-  }, [countyData, mapLoaded, selectedVariable, metricData, viewState.zoom, loadingMetricData]);
+    // NOTE: No cleanup function here - layers are removed explicitly when leaving county level
+    // Having a cleanup function causes flashing because it runs on every effect re-run
+  }, [countyData, mapLoaded, selectedVariable, metricData, currentGeoLevel, loadingMetricData]);
 
   // Render metro boundaries on the map
   useEffect(() => {
     if (!mapRef.current || !mapLoaded) return;
     
     const map = mapRef.current.getMap();
-    const geoLevel = getGeoLevel(viewState.zoom);
     
     // If we're not at metro level, remove layers and return
-    if (geoLevel !== 'metro') {
+    if (currentGeoLevel !== 'metro') {
       if (map.getLayer('metro-fill')) {
         map.removeLayer('metro-fill');
       }
@@ -1404,6 +1732,41 @@ export default function MapView() {
     const isPercentage = isPercentageVariable(selectedVariable);
     const isCurrency = isCurrencyVariable(selectedVariable);
     const isZordi = selectedVariable?.key?.toLowerCase().includes('zordi') || false;
+    
+    // 🔍 DEBUG: Metro GeoJSON Key Check
+    const firstMetro = metroData?.features?.[0];
+    if (firstMetro) {
+      console.log('🔍 METRO GEOJSON SAMPLE KEYS:', {
+        id: firstMetro.id,
+        propsKeys: Object.keys(firstMetro.properties || {}),
+        sampleProps: firstMetro.properties,
+        totalFeatures: metroData.features.length
+      });
+    }
+    
+    // 🔍 DEBUG: Metro DB Key Check
+    const sampleMetroData = metricData.find(d => {
+      const ge = Array.isArray(d.geo_entity) ? d.geo_entity[0] : d.geo_entity;
+      return ge?.geo_level === 'metro' || ge?.geo_level === 'msa';
+    });
+    
+    if (sampleMetroData) {
+      const ge = Array.isArray(sampleMetroData.geo_entity) ? sampleMetroData.geo_entity[0] : sampleMetroData.geo_entity;
+      console.log('🔍 METRO DB SAMPLE:', {
+        cbsa_code: ge.cbsa_code,
+        cbsa_code_string: ge.cbsa_code?.toString().trim(),
+        typeof_cbsa: typeof ge.cbsa_code,
+        name: ge.name,
+        geoid: ge.geoid,
+        totalMetroObsInData: metricData.filter(d => {
+          const g = Array.isArray(d.geo_entity) ? d.geo_entity[0] : d.geo_entity;
+          return g?.geo_level === 'metro' || g?.geo_level === 'msa';
+        }).length,
+        valueMapSize: valueMap.size
+      });
+    } else {
+      console.warn('🔍 NO metro-level data found in metricData for this variable');
+    }
     
     // Add colors to features based on metric data
     const metroDataWithValues = {
@@ -1604,17 +1967,16 @@ export default function MapView() {
         }
       }
     };
-  }, [metroData, mapLoaded, selectedVariable, metricData, viewState.zoom, loadingMetricData]);
+  }, [metroData, mapLoaded, selectedVariable, metricData, currentGeoLevel, loadingMetricData]);
 
   // Render ZIP code boundaries on the map
   useEffect(() => {
     if (!mapRef.current || !mapLoaded || !zipData) return;
     
     const map = mapRef.current.getMap();
-    const geoLevel = getGeoLevel(viewState.zoom);
     
     // If we're not at ZIP level, remove layers and return
-    if (geoLevel !== 'zip') {
+    if (currentGeoLevel !== 'zip') {
       if (map.getLayer('zip-labels')) {
         map.removeLayer('zip-labels');
       }
@@ -1627,6 +1989,8 @@ export default function MapView() {
       if (map.getSource('zip-boundaries')) {
         map.removeSource('zip-boundaries');
       }
+      // Reset ref when leaving zip level
+      lastRenderedZipVariableRef.current = null;
       return;
     }
     
@@ -1635,20 +1999,6 @@ export default function MapView() {
     // If a variable is selected but data is still loading, don't render yet
     if (selectedVariable && loadingMetricData) {
       return;
-    }
-    
-    // Remove old ZIP layers if exist
-    if (map.getLayer('zip-labels')) {
-      map.removeLayer('zip-labels');
-    }
-    if (map.getLayer('zip-fill')) {
-      map.removeLayer('zip-fill');
-    }
-    if (map.getLayer('zip-boundaries')) {
-      map.removeLayer('zip-boundaries');
-    }
-    if (map.getSource('zip-boundaries')) {
-      map.removeSource('zip-boundaries');
     }
     
     const valueMap = createValueMap();
@@ -1697,6 +2047,44 @@ export default function MapView() {
       type: 'FeatureCollection',
       features: zipDataWithValues.features
     };
+    
+    // Check if we can use the setData() optimization (prevents flash when panning/zooming)
+    // Only use optimization if: source exists AND variable hasn't changed
+    // When variable changes, we need to re-add layers to update paint properties
+    const existingSource = map.getSource('zip-boundaries') as mapboxgl.GeoJSONSource;
+    const currentVariableId = selectedVariable?.id || null;
+    const variableChanged = lastRenderedZipVariableRef.current !== currentVariableId;
+    
+    if (existingSource && !variableChanged) {
+      // Same variable, just update data without removing layers (no flash!)
+      existingSource.setData(geoJsonData);
+      
+      // Also update the fill-color paint property in case it was created before metric data loaded
+      // (first render might have used static color if metricData was empty)
+      if (map.getLayer('zip-fill')) {
+        map.setPaintProperty('zip-fill', 'fill-color', 
+          selectedVariable && metricData.length > 0 ? ['get', 'color'] : '#f3f4f6'
+        );
+      }
+      return;
+    }
+    
+    // Variable changed or source doesn't exist - need to remove old layers and create fresh
+    if (map.getLayer('zip-labels')) {
+      map.removeLayer('zip-labels');
+    }
+    if (map.getLayer('zip-fill')) {
+      map.removeLayer('zip-fill');
+    }
+    if (map.getLayer('zip-boundaries')) {
+      map.removeLayer('zip-boundaries');
+    }
+    if (map.getSource('zip-boundaries')) {
+      map.removeSource('zip-boundaries');
+    }
+    
+    // Track current variable for future optimization
+    lastRenderedZipVariableRef.current = currentVariableId;
     
     try {
       map.addSource('zip-boundaries', {
@@ -1860,63 +2248,52 @@ export default function MapView() {
         'text-halo-blur': 1
       }
     });
-    
-    // Cleanup function
-    return () => {
-      if (mapRef.current) {
-        const map = mapRef.current.getMap();
-        if (map.getLayer('zip-labels')) {
-          map.removeLayer('zip-labels');
-        }
-        if (map.getLayer('zip-fill')) {
-          map.removeLayer('zip-fill');
-        }
-        if (map.getLayer('zip-boundaries')) {
-          map.removeLayer('zip-boundaries');
-        }
-        if (map.getSource('zip-boundaries')) {
-          map.removeSource('zip-boundaries');
-        }
-      }
-    };
-  }, [zipData, mapLoaded, selectedVariable, metricData, viewState.zoom, loadingMetricData]);
+
+    // NOTE: No cleanup function here - layers are removed explicitly when leaving zip level
+    // Having a cleanup function causes flashing because it runs on every effect re-run
+  }, [zipData, mapLoaded, selectedVariable, metricData, currentGeoLevel, loadingMetricData]);
 
   // Handle map load
   const handleMapLoad = () => {
-    setMapLoaded(true);
-    
-    // Hide the default Mapbox state boundaries and labels since we'll use our own
-    setTimeout(() => {
-      if (mapRef.current) {
-        const map = mapRef.current.getMap();
-        
-        // Hide default state boundary layer
-        const stateBoundaryLayer = 'admin-1-boundary';
-        if (map.getLayer(stateBoundaryLayer)) {
-          map.setLayoutProperty(stateBoundaryLayer, 'visibility', 'none');
-        }
-        
-        // Hide default state label layers
-        const stateLabelLayers = [
-          'state-label',
-          'admin-1-boundary-label', 
-          'admin-0-boundary-label',
-          'country-label',
-          'settlement-major-label',
-          'settlement-minor-label'
-        ];
-        
-        stateLabelLayers.forEach(layerId => {
-          if (map.getLayer(layerId)) {
-            try {
-              map.setLayoutProperty(layerId, 'visibility', 'none');
-            } catch (e) {
-              // Layer might not exist in this style
-            }
-          }
-        });
+    // Hide the default Mapbox city/settlement labels IMMEDIATELY before setting mapLoaded
+    // This prevents the "flash" of city names before state boundaries load
+    if (mapRef.current) {
+      const map = mapRef.current.getMap();
+      
+      // Hide default state boundary layer
+      const stateBoundaryLayer = 'admin-1-boundary';
+      if (map.getLayer(stateBoundaryLayer)) {
+        map.setLayoutProperty(stateBoundaryLayer, 'visibility', 'none');
       }
-    }, 1000);
+      
+      // Hide default state label layers AND city/settlement labels
+      const labelsToHide = [
+        'state-label',
+        'admin-1-boundary-label', 
+        'admin-0-boundary-label',
+        'country-label',
+        'settlement-major-label',
+        'settlement-minor-label',
+        'settlement-subdivision-label',
+        'poi-label',
+        'airport-label',
+        'natural-point-label',
+        'water-point-label',
+        'water-line-label'
+      ];
+      
+      labelsToHide.forEach(layerId => {
+        if (map.getLayer(layerId)) {
+          try {
+            map.setLayoutProperty(layerId, 'visibility', 'none');
+          } catch (e) {
+            // Layer might not exist in this style
+          }
+        }
+      });
+    }
+    
+    setMapLoaded(true);
   };
 
   // Handle window resize to fix map layout issues
@@ -2358,11 +2735,29 @@ export default function MapView() {
       const props = feature.properties;
       
       if (props && props.value) {
-        const name = props.name || 
-                     props.NAME || 
-                     props.ZCTA5CE10 || 
-                     props.ZCTA ||
-                     'Unknown';
+        let name = props.name || 
+                   props.NAME || 
+                   props.ZCTA5CE10 || 
+                   props.ZCTA ||
+                   'Unknown';
+        
+        // For counties, append "County" and state abbreviation
+        if (geoLevel === 'county' && props.NAME) {
+          // Map FIPS codes to state abbreviations
+          const stateFipsToAbbr: Record<string, string> = {
+            '01': 'AL', '02': 'AK', '04': 'AZ', '05': 'AR', '06': 'CA', '08': 'CO', '09': 'CT', '10': 'DE', '11': 'DC',
+            '12': 'FL', '13': 'GA', '15': 'HI', '16': 'ID', '17': 'IL', '18': 'IN', '19': 'IA', '20': 'KS', '21': 'KY',
+            '22': 'LA', '23': 'ME', '24': 'MD', '25': 'MA', '26': 'MI', '27': 'MN', '28': 'MS', '29': 'MO', '30': 'MT',
+            '31': 'NE', '32': 'NV', '33': 'NH', '34': 'NJ', '35': 'NM', '36': 'NY', '37': 'NC', '38': 'ND', '39': 'OH',
+            '40': 'OK', '41': 'OR', '42': 'PA', '44': 'RI', '45': 'SC', '46': 'SD', '47': 'TN', '48': 'TX', '49': 'UT',
+            '50': 'VT', '51': 'VA', '53': 'WA', '54': 'WV', '55': 'WI', '56': 'WY'
+          };
+          
+          const stateFips = props.STATE || props.STATEFP || '';
+          const stateAbbr = stateFipsToAbbr[stateFips] || '';
+          
+          name = stateAbbr ? `${props.NAME} County, ${stateAbbr}` : `${props.NAME} County`;
+        }
         
         setHoveredFeature({
           name,
@@ -2542,6 +2937,29 @@ export default function MapView() {
             const source = variable.key ? (variableSources[variable.key] || 'Realtor.com') : 'Realtor.com';
             const geoLevels = variable.key ? variableGeoLevels[variable.key] : null;
             
+            // Get the most recent date from metricData if available
+            const mostRecentDate = metricData.length > 0 ? metricData[0].date : null;
+            
+            // Format date function (adds 1 month to displayed date)
+            const formatDate = (dateStr: string) => {
+              const [year, month] = dateStr.split('-');
+              let monthIndex = parseInt(month) - 1; // Convert to 0-based index
+              let yearNum = parseInt(year);
+              
+              // Add 1 month
+              monthIndex += 1;
+              
+              // Handle year rollover
+              if (monthIndex > 11) {
+                monthIndex = 0;
+                yearNum += 1;
+              }
+              
+              const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'];
+              return `${monthNames[monthIndex]} ${yearNum}`;
+            };
+            
             return (
               <div 
                 className="fixed z-[9999] w-80 p-3 bg-white/85 dark:bg-gray-800/85 backdrop-blur-md text-xs rounded-lg border border-gray-200/50 dark:border-gray-700/50 shadow-lg pointer-events-none"
@@ -2555,7 +2973,10 @@ export default function MapView() {
                 <div className="absolute -left-2 top-1/2 -translate-y-1/2 w-0 h-0 border-t-8 border-t-transparent border-b-8 border-b-transparent border-r-8 border-r-white/85 dark:border-r-gray-800/85"></div>
                 <div className="font-semibold mb-1 text-gray-900 dark:text-gray-100">{variable.name}</div>
                 <div className="text-gray-700 dark:text-gray-300 mb-2">{variable.description}</div>
-                <div className="text-gray-600 dark:text-gray-400 text-[10px] italic">Source: {source}</div>
+                <div className="text-gray-600 dark:text-gray-400 text-[10px] italic">
+                  Source: {source}
+                  {mostRecentDate && `, last updated ${formatDate(mostRecentDate)}`}
+                </div>
                 {geoLevels && (
                   <div className="text-gray-600 dark:text-gray-400 text-[10px] mt-1">
                     <span className="font-semibold">Available levels:</span> {geoLevels}
@@ -2679,11 +3100,23 @@ export default function MapView() {
             };
 
             const formatDate = (dateStr: string) => {
-              // Parse date without timezone conversion
+              // Parse date without timezone conversion and add 1 month
               const [year, month] = dateStr.split('-');
+              let monthIndex = parseInt(month) - 1; // Convert to 0-based index
+              let yearNum = parseInt(year);
+              
+              // Add 1 month
+              monthIndex += 1;
+              
+              // Handle year rollover
+              if (monthIndex > 11) {
+                monthIndex = 0;
+                yearNum += 1;
+              }
+              
               const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
                 'July', 'August', 'September', 'October', 'November', 'December'];
-              return `${monthNames[parseInt(month) - 1]} ${year}`;
+              return `${monthNames[monthIndex]} ${yearNum}`;
             };
 
             // Calculate tooltip position to avoid cursor overlap
@@ -2719,11 +3152,6 @@ export default function MapView() {
                   <div className="font-semibold text-base mb-2" style={{ color: '#0D98BA' }}>
                     {selectedVariable.name}: {formatValue(hoveredFeature.value)}
                   </div>
-                  {hoveredFeature.date && (
-                    <div className="text-gray-700 dark:text-gray-300 text-[11px] mb-2">
-                      {formatDate(hoveredFeature.date)}
-                    </div>
-                  )}
                   {description && (
                     <div className="text-gray-700 dark:text-gray-300 mb-2 text-xs leading-relaxed">
                       {description}
@@ -2731,6 +3159,7 @@ export default function MapView() {
                   )}
                   <div className="text-gray-600 dark:text-gray-400 text-[10px] italic mb-1">
                     Source: {source}
+                    {hoveredFeature.date && `, last updated ${formatDate(hoveredFeature.date)}`}
                   </div>
                   <div className="font-semibold text-sm border-t border-gray-300/50 dark:border-gray-600/50 pt-2 mt-2" style={{ color: '#0D98BA' }}>
                     Click area to view historical data
@@ -2750,7 +3179,13 @@ export default function MapView() {
             onMouseMove={handleMapMouseMove}
             onMouseLeave={() => setHoveredFeature(null)}
             cursor={hoveredFeature ? 'pointer' : 'grab'}
-            style={{ width: '100%', height: '100%' }}
+            style={{ 
+              width: '100%', 
+              height: '100%',
+              // Fade in the map after it's loaded to prevent flash of city labels
+              opacity: mapLoaded ? 1 : 0,
+              transition: 'opacity 0.3s ease-in-out'
+            }}
             mapStyle="mapbox://styles/mapbox/streets-v12"
             mapboxAccessToken={MAPBOX_TOKEN}
             maxBounds={US_BOUNDS}
