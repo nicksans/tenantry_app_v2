@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Plus, History, MessageSquare, ChevronLeft, X } from 'lucide-react';
+import { Send, Plus, History, MessageSquare, ChevronLeft, X, Sparkles } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 
@@ -31,7 +31,7 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
   });
   
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { text: "Hi! I'm Tenantry AI. Ask me anything about rental markets, real estate trends, or your reports.", sender: 'bot' }
+    { text: "Ask me anything about your local real estate market, rental trends, market forecasts, or Tenantry. I'm here to help!", sender: 'bot' }
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -41,6 +41,8 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [visibleChatsCount, setVisibleChatsCount] = useState(10); // Track how many chats to show
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [currentPlaceholderIndex, setCurrentPlaceholderIndex] = useState(0);
+  const [displayedPlaceholder, setDisplayedPlaceholder] = useState('');
 
   // Loading messages that rotate every 8 seconds
   const loadingMessages = [
@@ -48,6 +50,16 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
     "Thinking",
     "Finalizing your insights",
     "Almost ready"
+  ];
+
+  // Placeholder messages that rotate every 5 seconds
+  const placeholderMessages = [
+    "Best rent-to-price ratio markets in NY?",
+    "Top NC zip codes for appreciation?",
+    "Is Columbus or Cincinnati selling faster?",
+    "Lowest crime zip code in Syracuse?",
+    "Is Nashville or Charlotte growing faster?"
+    
   ];
 
   const scrollToBottom = () => {
@@ -76,6 +88,35 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
       return () => clearInterval(interval); // Clean up interval when loading stops
     }
   }, [isLoading]);
+
+  // Typing effect for placeholder text
+  useEffect(() => {
+    const currentMessage = placeholderMessages[currentPlaceholderIndex];
+    let charIndex = 0;
+    
+    // Reset and start typing
+    setDisplayedPlaceholder('');
+    
+    // Type out the message character by character
+    const typingInterval = setInterval(() => {
+      if (charIndex < currentMessage.length) {
+        setDisplayedPlaceholder(currentMessage.substring(0, charIndex + 1));
+        charIndex++;
+      } else {
+        clearInterval(typingInterval);
+      }
+    }, 30); // Type each character every 30ms
+
+    // After 5 seconds, move to next message
+    const rotateTimeout = setTimeout(() => {
+      setCurrentPlaceholderIndex((prev) => (prev + 1) % placeholderMessages.length);
+    }, 5000);
+
+    return () => {
+      clearInterval(typingInterval);
+      clearTimeout(rotateTimeout);
+    };
+  }, [currentPlaceholderIndex]);
 
   // Save current session to localStorage whenever it changes
   useEffect(() => {
@@ -177,7 +218,7 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
         if (loadedMessages.length > 0) {
           // Add the welcome message at the start if not already there
           setMessages([
-            { text: "Hi! I'm Tenantry AI. Ask me anything about rental markets, real estate trends, or your reports.", sender: 'bot' },
+            { text: "Ask me anything about your local real estate market, rental trends, market forecasts, or Tenantry. I'm here to help!", sender: 'bot' },
             ...loadedMessages
           ]);
         }
@@ -352,7 +393,7 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
     const newSessionId = `${user.id}_${Date.now()}`;
     setSessionId(newSessionId);
     setMessages([
-      { text: "Hi! I'm Tenantry AI. Ask me anything about rental markets, real estate trends, or your reports.", sender: 'bot' }
+      { text: "Ask me anything about your local real estate market, rental trends, market forecasts, or Tenantry. I'm here to help!", sender: 'bot' }
     ]);
     setShowHistory(false);
   };
@@ -444,7 +485,10 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
         <div className={`${isPanel ? 'p-6 border-b border-gray-200 dark:border-gray-700' : 'mb-8'} flex items-start justify-between`}>
           <div className="flex-1">
             <div className="flex items-center justify-between mb-2">
-              <h1 className="text-3xl font-semibold text-gray-900 dark:text-gray-100">Tenantry AI</h1>
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-7 h-7 text-brand-500" />
+                <h1 className="text-3xl font-semibold text-gray-900 dark:text-gray-100">Tenantry AI</h1>
+              </div>
               {isPanel && onClose && (
                 <div className="flex items-center gap-2">
                   <button
@@ -477,9 +521,6 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
                 </div>
               )}
             </div>
-            <p className="text-gray-600 dark:text-gray-400">
-              Ask me anything about rental markets, property analysis, or real estate trends
-            </p>
           </div>
           {!isPanel && (
             <div className="flex gap-2">
@@ -513,7 +554,7 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
         <div className={`${isPanel ? 'flex-1 flex flex-col px-6 pb-6 pt-4 min-h-0' : 'flex gap-4'}`}>
           {/* Chat History Sidebar */}
           {showHistory && (
-            <div className={`${isPanel ? 'mb-4' : 'w-80'} bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4 ${isPanel ? 'h-64' : 'h-[600px]'} overflow-hidden flex flex-col`}>
+            <div className={`${isPanel ? 'mb-4' : 'w-80'} bg-white/30 dark:bg-gray-800/30 backdrop-blur-md rounded-lg shadow-sm border border-gray-200/30 dark:border-gray-700/30 p-4 ${isPanel ? 'h-64' : 'h-[600px]'} overflow-hidden flex flex-col`}>
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-semibold text-gray-900 dark:text-gray-100">Previous Chats</h3>
                 <button
@@ -577,7 +618,7 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
           {/* Chat Area */}
           <div className={`flex-1 ${isPanel ? 'flex flex-col min-h-0' : showHistory ? 'max-w-[calc(100%-21rem)]' : ''}`}>
             {/* Messages Area */}
-            <div className={`bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 space-y-4 overflow-y-auto ${
+            <div className={`bg-white/20 dark:bg-gray-800/20 backdrop-blur-md rounded-lg shadow-sm border border-gray-200/30 dark:border-gray-700/30 p-6 space-y-4 overflow-y-auto ${
               isPanel 
                 ? 'flex-1 min-h-0 mb-4' 
                 : 'min-h-[500px] max-h-[600px] mb-6'
@@ -591,7 +632,7 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
                     className={`max-w-[80%] rounded-lg p-4 ${
                       message.sender === 'user'
                         ? 'bg-brand-500 text-white'
-                        : 'bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-600'
+                        : 'bg-white/40 dark:bg-gray-700/40 backdrop-blur-sm text-gray-900 dark:text-gray-100 border border-gray-200/30 dark:border-gray-600/30'
                     }`}
                   >
                     <p className="text-sm whitespace-pre-wrap">{message.text}</p>
@@ -600,7 +641,7 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
               ))}
               {isLoading && (
                 <div className="flex justify-start">
-                  <div className="bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-600 rounded-lg p-4">
+                  <div className="bg-white/40 dark:bg-gray-700/40 backdrop-blur-sm text-gray-900 dark:text-gray-100 border border-gray-200/30 dark:border-gray-600/30 rounded-lg p-4">
                     <p className="text-sm text-gray-600 dark:text-gray-300">
                       {loadingMessages[loadingMessageIndex]}
                       <span className="inline-block animate-[ellipsis_1.4s_infinite]">.</span>
@@ -614,16 +655,16 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
             </div>
 
             {/* Input Area */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-              <div className="flex gap-3">
+            <div className="bg-white/25 dark:bg-gray-800/25 backdrop-blur-md rounded-lg shadow-sm border border-gray-200/30 dark:border-gray-700/30 p-6">
+              <div className="flex gap-3 mb-2">
                 <input
                   type="text"
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyPress={handleKeyPress}
-                  placeholder="Ask anything..."
+                  placeholder={displayedPlaceholder}
                   disabled={isLoading}
-                  className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent disabled:bg-gray-100 dark:disabled:bg-gray-700 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                  className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent disabled:bg-gray-100 dark:disabled:bg-gray-700 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 text-sm placeholder:text-sm"
                 />
                 <button
                   onClick={sendMessage}
@@ -633,6 +674,9 @@ export default function TenantryAI({ user, onClose, isPanel = false }: TenantryA
                   <Send className="w-5 h-5" />
                 </button>
               </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+                AI-generated content may be inaccurate.
+              </p>
             </div>
           </div>
         </div>

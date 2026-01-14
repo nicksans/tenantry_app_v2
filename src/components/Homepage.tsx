@@ -1,10 +1,21 @@
-import { ArrowRight, CheckCircle, TrendingUp, FileText, Search } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { CheckCircle, TrendingUp, FileText, Search } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import CircuitAnimation from './CircuitAnimation';
+import LocationAutocomplete from './LocationAutocomplete';
 
 export default function Homepage() {
   const [billingPeriod, setBillingPeriod] = useState<'monthly' | 'annually'>('annually');
+  const [searchLocation, setSearchLocation] = useState('');
+  const navigate = useNavigate();
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (searchLocation.trim()) {
+      // Navigate to the map view with the selected location
+      navigate('/app/map', { state: { searchLocation } });
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-950">
@@ -12,10 +23,32 @@ export default function Homepage() {
       <nav className="bg-gray-900 border-b border-gray-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <div className="flex items-center gap-3">
+            {/* Logo */}
+            <Link to="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
               <img src="/logo copy.png" alt="Tenantry Logo" className="w-8 h-8" />
               <h1 className="text-2xl font-bold text-white">Tenantry</h1>
+            </Link>
+            
+            {/* Navigation Tabs */}
+            <div className="hidden md:flex items-center gap-12 lg:gap-16">
+              <button className="text-gray-300 hover:text-white font-medium transition-colors">
+                Features
+              </button>
+              <button className="text-gray-300 hover:text-white font-medium transition-colors">
+                Map
+              </button>
+              <button className="text-gray-300 hover:text-white font-medium transition-colors">
+                Graph
+              </button>
+              <button className="text-gray-300 hover:text-white font-medium transition-colors">
+                Pricing
+              </button>
+              <button className="text-gray-300 hover:text-white font-medium transition-colors">
+                FAQ
+              </button>
             </div>
+            
+            {/* Auth Buttons */}
             <div className="flex items-center gap-4">
               <Link
                 to="/auth/sign-in"
@@ -27,7 +60,7 @@ export default function Homepage() {
                 to="/auth/sign-up"
                 className="bg-brand-500 hover:bg-brand-600 text-white px-6 py-2 rounded-lg font-medium transition-colors"
               >
-                Get Started Free
+                Choose a Plan
               </Link>
             </div>
           </div>
@@ -40,44 +73,45 @@ export default function Homepage() {
           {/* Left: headline, text, bullets, CTAs */}
           <div className="flex-1 text-center lg:text-left">
             <h1 className="text-5xl font-bold text-white mb-6">
-              Understand Any Rental Market in Seconds.
+              Analyze Any <span className="font-bold text-brand-400">Real Estate Market</span> in Seconds.
             </h1>
             <p className="text-xl text-gray-300 mb-8 max-w-3xl mx-auto lg:mx-0">
-            Analyze local real estate markets with AI-powered tools trained on the latest available data from our  <span className="font-bold text-brand-400">140+
-            million</span> property dataset.
+            Visualize rental market trends, pricing shifts, and forecasts across cities, counties, and ZIP codes. Tenantry turns our massive housing datasets into clear insights with AI-driven analytics.
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start mb-8">
               <div className="flex items-center gap-2 text-gray-200">
                 <CheckCircle className="w-5 h-5 text-brand-400" />
-                <span>CMAs</span>
+                <span>Interactive Heat Maps</span>
               </div>
               <div className="flex items-center gap-2 text-gray-200">
                 <CheckCircle className="w-5 h-5 text-brand-400" />
-                <span>Rental Market Analysis</span>
+                <span>Comparison Graphs</span>
               </div>
               <div className="flex items-center gap-2 text-gray-200">
                 <CheckCircle className="w-5 h-5 text-brand-400" />
-                <span>Market Finder</span>
+                <span>Market Forecasts</span>
               </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start items-center">
-              <Link
-                to="/auth/sign-up"
-                className="inline-flex items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white px-8 py-4 rounded-lg font-medium text-lg transition-colors"
-              >
-                Get Started Free
-                <ArrowRight className="w-5 h-5" />
-              </Link>
-              <button
-                onClick={() => window.open('#', '_blank')}
-                className="inline-flex items-center gap-2 bg-gray-700 hover:bg-gray-600 text-white px-8 py-4 rounded-lg font-medium text-lg transition-colors border border-gray-600"
-              >
-                <FileText className="w-5 h-5" />
-                View Sample Reports
-              </button>
-            </div>
+            <form onSubmit={handleSearch} className="w-full max-w-2xl mx-auto lg:mx-0">
+              <div className="relative">
+                <LocationAutocomplete
+                  value={searchLocation}
+                  onChange={setSearchLocation}
+                  locationType="both"
+                  placeholder="Search your City, County, or ZIP Code"
+                  className="w-full px-6 py-4 text-lg bg-white dark:bg-gray-800 border-2 border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:border-brand-500 dark:focus:border-brand-400 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
+                />
+                <button
+                  type="submit"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 bg-brand-500 hover:bg-brand-600 text-white p-3 rounded-lg font-medium transition-colors flex items-center justify-center"
+                  aria-label="Search"
+                >
+                  <Search className="w-5 h-5" />
+                </button>
+              </div>
+            </form>
           </div>
 
           {/* Right: logo animation */}

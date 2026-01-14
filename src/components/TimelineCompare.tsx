@@ -970,7 +970,7 @@ CRITICAL RULES:
         {/* Step 2: Enter Location */}
         <div className="px-6 py-4 lg:border-r border-gray-200 dark:border-gray-700">
           <label className="block text-base font-medium text-gray-900 dark:text-gray-100 mb-4 text-center">
-            2. Enter Locations (up to 3)
+            2. Enter Locations (Compare up to 3)
           </label>
           {selectedLocations.length < 3 ? (
             <LocationAutocomplete

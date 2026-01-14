@@ -2,9 +2,11 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { ChevronDown, ChevronUp, Loader2, Info, Search } from 'lucide-react';
 import { Map as MapGL, NavigationControl } from 'react-map-gl';
 import type { MapRef } from 'react-map-gl';
+import { useLocation } from 'react-router-dom';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { supabase } from '../lib/supabase';
 import centerOfMass from '@turf/center-of-mass';
+import LocationDetail from './LocationDetail';
 
 interface Variable {
   id: string;
@@ -20,6 +22,7 @@ interface MetricObservation {
   variable_id: string;
   value: number;
   date: string;
+  pct_change_prev?: number;
   geo_entity: {
     id: string;
     geoid: string;
@@ -27,11 +30,13 @@ interface MetricObservation {
     name: string;
     state_abbr: string;
     county_fips: string;
+    cbsa_code: string;  // CBSA code for metros
     zcta: string;
   };
 }
 
 export default function MapView() {
+  const location = useLocation();
   const [selectedVariable, setSelectedVariable] = useState<Variable | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -46,6 +51,17 @@ export default function MapView() {
   const [metroData, setMetroData] = useState<any>(null);
   const [nationalData, setNationalData] = useState<any>(null);
   const [loadingNational, setLoadingNational] = useState(false);
+  
+  // Location detail view state
+  const [showLocationDetail, setShowLocationDetail] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState<{
+    name: string;
+    geoLevel: 'national' | 'state' | 'metro' | 'county' | 'zip';
+  } | null>(null);
+  const [mapKey, setMapKey] = useState(0); // Used to force map remount when needed
+  
+  // MoM % toggle state
+  const [showMoMPercentage, setShowMoMPercentage] = useState(false);
   
   // Track last loaded bounds for ZIP codes
   const lastZipBoundsRef = useRef<{ west: number; east: number; south: number; north: number } | null>(null);
@@ -297,6 +313,21 @@ export default function MapView() {
     fetchingGeoLevelsRef.current.clear();
   }, [selectedVariable?.id]);
 
+  // Reset map state when returning from LocationDetail view
+  const prevShowLocationDetail = useRef(showLocationDetail);
+  useEffect(() => {
+    // Only trigger when transitioning from detail view back to map (true -> false)
+    if (prevShowLocationDetail.current === true && showLocationDetail === false && selectedVariable?.id) {
+      console.log('🔄 Returning from LocationDetail - forcing complete map reload');
+      // Clear cache and fetching flags to force data reload
+      setMetricDataCache({});
+      fetchingGeoLevelsRef.current.clear();
+      // Force map to remount by changing its key
+      setMapKey(prev => prev + 1);
+    }
+    prevShowLocationDetail.current = showLocationDetail;
+  }, [showLocationDetail, selectedVariable?.id]);
+
   // Fetch metric data for current geo level based on zoom and viewport
   useEffect(() => {
     if (!selectedVariable || !selectedVariable.id) {
@@ -339,23 +370,14 @@ export default function MapView() {
         // Check if this is a ZORDI variable (uses pre-calculated pct_change_prev field)
         const isZordiVariable = selectedVariable.key?.toLowerCase().includes('zordi') || false;
         
-        // First, get the most recent date for this variable
-        const { data: dateData, error: dateError } = await supabase
-          .from('metric_observations_with_geo')
-          .select('date')
-          .eq('variable_id', selectedVariable.id)
-          .order('date', { ascending: false })
-          .limit(1);
+        // Use showMoMPercentage toggle to determine if we should use pct_change_prev
+        const isMoMVariable = showMoMPercentage;
+        let variableIdToFetch = selectedVariable.id;
         
-        if (dateError) throw dateError;
-        if (!dateData || dateData.length === 0) {
-          setLoadingMetricData(false);
-          return;
-        }
-
-        const mostRecentDate = dateData[0].date;
+        console.log(`🔍 MoM Debug - Variable: ${selectedVariable.name}, Toggle: ${showMoMPercentage}, isMoMVariable: ${isMoMVariable}`);
         
         // Map frontend geo level names to database geo_level values
+        // IMPORTANT: This must happen BEFORE the date query so we filter by the correct geo_level
         const geoLevelMap: Record<string, string> = {
           'national': 'country',
           'state': 'state',
@@ -365,6 +387,27 @@ export default function MapView() {
         };
         
         const dbGeoLevel = geoLevelMap[geoLevel] || geoLevel;
+        
+        // First, get the most recent date for this variable AND geo level
+        // CRITICAL: Different geo levels may have different latest dates!
+        // For example, metros might have 2025-11-01 while ZIPs have 2025-12-01
+        const { data: dateData, error: dateError } = await supabase
+          .from('metric_observations_with_geo')
+          .select('date')
+          .eq('variable_id', variableIdToFetch)  // Use main variable ID for MoM variables
+          .eq('geo_level', dbGeoLevel)  // 🔥 KEY FIX: Filter by geo_level to get correct latest date
+          .order('date', { ascending: false })
+          .limit(1);
+        
+        if (dateError) throw dateError;
+        if (!dateData || dateData.length === 0) {
+          console.log(`⚠️ No data found for ${selectedVariable.name} at ${geoLevel} level (db: ${dbGeoLevel})`);
+          setLoadingMetricData(false);
+          return;
+        }
+
+        const mostRecentDate = dateData[0].date;
+        console.log(`📅 Most recent date for ${geoLevel} (${dbGeoLevel}): ${mostRecentDate}`);
         
         console.log(`🔄 Fetching ${geoLevel} level data (db: ${dbGeoLevel}) for ${selectedVariable.name}...`);
         
@@ -402,6 +445,9 @@ export default function MapView() {
           
           if (useView) {
             // Use the optimized view
+            console.log(`🔍 MoM Debug - Will fetch pct_change_prev: ${isZordiVariable || isMoMVariable}`);
+            console.log(`🔍 MoM Debug - Query params: variable_id=${variableIdToFetch}, date=${mostRecentDate}, geo_level=${dbGeoLevel}`);
+            
             let query = supabase
               .from('metric_observations_with_geo')
               .select(`
@@ -409,7 +455,7 @@ export default function MapView() {
                 variable_id,
                 value,
                 date,
-                ${isZordiVariable ? 'pct_change_prev,' : ''}
+                ${(isZordiVariable || isMoMVariable) ? 'pct_change_prev,' : ''}
                 geo_level,
                 geoid,
                 geo_name,
@@ -418,7 +464,7 @@ export default function MapView() {
                 cbsa_code,
                 zcta
               `)
-              .eq('variable_id', selectedVariable.id)
+              .eq('variable_id', variableIdToFetch)  // Use main variable ID for MoM variables
               .eq('date', mostRecentDate)
               .eq('geo_level', dbGeoLevel);  // 🔥 KEY FILTER: Only get this geo level
             
@@ -450,7 +496,7 @@ export default function MapView() {
                 variable_id,
                 value,
                 date,
-                ${isZordiVariable ? 'pct_change_prev,' : ''}
+                ${(isZordiVariable || isMoMVariable) ? 'pct_change_prev,' : ''}
                 geo_entity:geo_entities (
                   id,
                   geoid,
@@ -462,7 +508,7 @@ export default function MapView() {
                   zcta
                 )
               `)
-              .eq('variable_id', selectedVariable.id)
+              .eq('variable_id', variableIdToFetch)  // Use main variable ID for MoM variables
               .eq('date', mostRecentDate)
               .order('geo_entity_id')
               .range(offset, offset + batchSize - 1);
@@ -505,7 +551,7 @@ export default function MapView() {
           if (error) {
             console.error('❌ Error fetching metric data:', error);
             console.error('❌ Error details:', JSON.stringify(error, null, 2));
-            console.error('❌ Query was for:', { variable_id: selectedVariable.id, date: mostRecentDate, geo_level: dbGeoLevel });
+            console.error('❌ Query was for:', { variable_id: variableIdToFetch, date: mostRecentDate, geo_level: dbGeoLevel, isMoMVariable });
             throw error;
           }
           
@@ -537,18 +583,87 @@ export default function MapView() {
           }
         }));
         
-        // For ZORDI variables, use pct_change_prev as the value (multiply by 100 since it's stored as decimal)
+        // For ZORDI and MoM variables, use pct_change_prev as the value
         let finalData = transformedData;
-        if (isZordiVariable) {
+        
+        // 🔍 DEBUG: Check what pct_change_prev values we got from the database
+        if (isMoMVariable) {
+          console.log(`🔍 MoM Debug - Raw data from database (first 5):`, 
+            transformedData.slice(0, 5).map(obs => ({
+              name: obs.geo_entity.name,
+              value: obs.value,
+              pct_change_prev: obs.pct_change_prev,
+              date: obs.date
+            }))
+          );
+        }
+        
+        if (isZordiVariable || isMoMVariable) {
           finalData = transformedData.map(obs => ({
             ...obs,
             value: obs.pct_change_prev !== null && obs.pct_change_prev !== undefined 
-              ? obs.pct_change_prev * 100  // Convert from decimal to percentage (e.g., -0.115 -> -11.5)
-              : obs.value
+              ? obs.pct_change_prev * 100  // Convert decimal to percentage (e.g., -0.09 -> -9%)
+              : null  // Return null if pct_change_prev is missing (instead of showing raw value)
           }));
+          
+          if (isMoMVariable) {
+            console.log(`✅ Using pct_change_prev for MoM variable. After transformation (first 5):`, 
+              finalData.slice(0, 5).map(obs => ({
+                name: obs.geo_entity.name,
+                final_value: obs.value,
+                raw_pct_change_prev: obs.pct_change_prev,
+                date: obs.date
+              }))
+            );
+          }
         }
         
         console.log(`✅ Loaded ${finalData.length} observations for ${geoLevel} level (${selectedVariable.name})`);
+        
+        // Debug: For metros, show sample records and search for Pine Bluff specifically
+        if (geoLevel === 'metro' && finalData.length > 0) {
+          const sampleRecords = finalData.slice(0, 3).map(obs => {
+            const ge = obs.geo_entity;
+            return {
+              name: ge.name,
+              cbsa_code: ge.cbsa_code,
+              geoid: ge.geoid,
+              value: obs.value
+            };
+          });
+          console.log('📊 Sample metro records from DB:', sampleRecords);
+          
+          // Search for Pine Bluff specifically (check both Census CBSA and name)
+          const pineBluff = finalData.find(obs => {
+            const ge = obs.geo_entity;
+            const name = ge.name?.toLowerCase() || '';
+            const cbsa = ge.cbsa_code?.toString() || '';
+            const geoid = ge.geoid?.toString() || '';
+            // Pine Bluff, AR Census CBSA = 38220
+            return name.includes('pine bluff') || cbsa === '38220' || geoid.includes('38220');
+          });
+          if (pineBluff) {
+            console.log('🎯 FOUND Pine Bluff in DB data:', {
+              name: pineBluff.geo_entity.name,
+              cbsa_code: pineBluff.geo_entity.cbsa_code,
+              cbsa_type: typeof pineBluff.geo_entity.cbsa_code,
+              geoid: pineBluff.geo_entity.geoid,
+              value: pineBluff.value,
+              date: pineBluff.date
+            });
+          } else {
+            console.warn('❌ Pine Bluff (CBSA 38220) NOT FOUND in DB data for this variable!');
+            console.log('💡 Checking if any Arkansas metros exist...');
+            const arMetros = finalData.filter(obs => {
+              const name = obs.geo_entity.name?.toLowerCase() || '';
+              return name.includes(', ar');
+            });
+            console.log(`   Found ${arMetros.length} Arkansas metros:`, arMetros.slice(0, 5).map(m => ({
+              name: m.geo_entity.name,
+              cbsa: m.geo_entity.cbsa_code
+            })));
+          }
+        }
         
         // Update cache for this specific geo level/region
         setMetricDataCache(prev => ({
@@ -571,32 +686,57 @@ export default function MapView() {
     viewState.zoom, 
     viewState.latitude, 
     viewState.longitude,
-    metricDataCache  // Re-run when cache is cleared to fetch new data
-  ]); // Trigger on zoom, viewport changes (panning), or cache changes
+    metricDataCache,  // Re-run when cache is cleared to fetch new data
+    showMoMPercentage  // Re-run when MoM toggle changes
+  ]); // Trigger on zoom, viewport changes (panning), cache changes, or MoM toggle
 
   // Calculate color scale for heat map
-  // Helper to determine if a variable should be displayed as currency
-  const isCurrencyVariable = (variable: Variable | null): boolean => {
-    if (!variable) return false;
-    if (variable.value_type === 'currency') return true;
-    // Also treat as currency if name includes rent, price, or income
-    const name = variable.name?.toLowerCase() || '';
-    const key = variable.key?.toLowerCase() || '';
-    // Exclude variables with "demand" in the name (e.g., "Rental Demand")
-    if (name.includes('demand')) return false;
-    // Exclude ZORDI variables (e.g., "zordi_metro_all")
-    if (key.includes('zordi')) return false;
-    return name.includes('rent') || name.includes('price') || name.includes('income');
+  // Get the value type for a variable
+  const getValueType = (variable: Variable | null): string => {
+    if (!variable) return 'number';
+    return variable.value_type || 'number';
   };
 
-  // Helper to determine if a variable should be displayed as percentage
-  const isPercentageVariable = (variable: Variable | null): boolean => {
-    if (!variable) return false;
-    if (variable.value_type === 'percent') return true;
-    const key = variable.key?.toLowerCase() || '';
-    // ZORDI variables should be displayed as percentages (they're percentage changes)
-    if (key.includes('zordi')) return true;
-    return false;
+  // Format value based on variable type
+  const formatValue = (value: number, variable: Variable | null): string => {
+    const valueType = getValueType(variable);
+    
+    // Check if this is a variable that uses pct_change_prev (already converted to percentage)
+    const isZordiVariable = variable?.key?.toLowerCase().includes('zordi') || 
+                            variable?.key?.toLowerCase().includes('engagement') || 
+                            false;
+    
+    // Check if MoM % toggle is on - if so, format as percentage
+    if (showMoMPercentage) {
+      return `${value.toFixed(2)}%`;
+    }
+    
+    switch (valueType) {
+      case 'currency':
+        return new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: 'USD',
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 0,
+        }).format(value);
+      
+      case 'percent':
+        // For ZORDI/engagement metrics, value is already a percentage (e.g., -14.545)
+        // For other percent metrics, value is a decimal that needs to be multiplied by 100
+        if (isZordiVariable) {
+          return `${value.toFixed(2)}%`;
+        } else {
+          return `${(value * 100).toFixed(2)}%`;
+        }
+      
+      case 'number':
+      default:
+        // For ZORDI/engagement metrics that aren't marked as percent type, still format as percentage
+        if (isZordiVariable) {
+          return `${value.toFixed(2)}%`;
+        }
+        return value.toLocaleString();
+    }
   };
 
   const getColorForValue = (value: number, min: number, max: number): string => {
@@ -690,21 +830,84 @@ export default function MapView() {
       if (geoLevel === 'state') {
         key = geoEntity.name; // Match by state name
       } else if (geoLevel === 'metro') {
-        // ALWAYS use CBSA code for metro matching - normalize to string and trim
-        key = geoEntity.cbsa_code?.toString().trim();
+        // For metros, try multiple sources for the CBSA code:
+        // 1. Direct cbsa_code field
+        // 2. Extract from geoid (format: "msa:394980" -> "394980")
+        if (geoEntity.cbsa_code) {
+          key = geoEntity.cbsa_code.toString().trim();
+        } else if (geoEntity.geoid) {
+          // Extract CBSA code from geoid format "msa:394980"
+          const geoid = geoEntity.geoid.toString().trim();
+          if (geoid.startsWith('msa:')) {
+            key = geoid.replace('msa:', '');
+          } else {
+            // If geoid is just a number, use it directly
+            key = geoid;
+          }
+        }
+        
+        // 🔥 ALSO add entry by metro name as fallback (for matching when IDs differ)
+        // This handles cases where DB uses Zillow IDs but GeoJSON uses Census CBSA codes
+        if (geoEntity.name) {
+          // Normalize name: "Pine Bluff, AR" -> "pine bluff, ar"
+          const normalizedName = geoEntity.name.toLowerCase().trim();
+          valueMap.set(`name:${normalizedName}`, { value: obs.value, date: obs.date });
+        }
       } else if (geoLevel === 'county') {
-        // Use 5-digit county_fips (standardized format)
-        key = geoEntity.county_fips;
+        // For counties, try multiple sources for the FIPS code:
+        // 1. Direct county_fips field
+        // 2. Extract from geoid (format: "county:01001" -> "01001")
+        if (geoEntity.county_fips) {
+          key = geoEntity.county_fips.toString().trim();
+        } else if (geoEntity.geoid) {
+          const geoid = geoEntity.geoid.toString().trim();
+          if (geoid.startsWith('county:')) {
+            key = geoid.replace('county:', '');
+          } else if (/^\d{5}$/.test(geoid)) {
+            // If geoid is already 5-digit FIPS, use it directly
+            key = geoid;
+          }
+        }
       } else if (geoLevel === 'zip') {
-        key = geoEntity.zcta; // Match by ZCTA
+        // For ZIPs, try multiple sources for the ZCTA code:
+        // 1. Direct zcta field
+        // 2. Extract from geoid (format: "zip:90210" -> "90210")
+        if (geoEntity.zcta) {
+          key = geoEntity.zcta.toString().trim();
+        } else if (geoEntity.geoid) {
+          const geoid = geoEntity.geoid.toString().trim();
+          if (geoid.startsWith('zip:')) {
+            key = geoid.replace('zip:', '');
+          } else if (geoid.startsWith('zcta:')) {
+            key = geoid.replace('zcta:', '');
+          } else if (/^\d{5}$/.test(geoid)) {
+            // If geoid is already 5-digit ZIP, use it directly
+            key = geoid;
+          }
+        }
       }
       
       if (key) {
         valueMap.set(key, { value: obs.value, date: obs.date });
+      } else if (geoLevel === 'metro') {
+        // Debug: Log metros that don't have a valid key
+        console.warn('⚠️ Metro with no valid key:', {
+          name: geoEntity.name,
+          cbsa_code: geoEntity.cbsa_code,
+          geoid: geoEntity.geoid,
+          geo_level: geoEntity.geo_level
+        });
       }
     });
     
-    // ValueMap created successfully
+    // Debug: Log valueMap size and sample entries for metros
+    if (geoLevel === 'metro' && valueMap.size > 0) {
+      const cbsaEntries = Array.from(valueMap.entries()).filter(e => !e[0].startsWith('name:'));
+      const nameEntries = Array.from(valueMap.entries()).filter(e => e[0].startsWith('name:'));
+      console.log(`📍 Metro valueMap created: ${cbsaEntries.length} CBSA entries + ${nameEntries.length} name fallbacks`);
+      console.log('📍 Sample CBSA keys:', cbsaEntries.slice(0, 5).map(e => e[0]));
+      console.log('📍 Sample name keys:', nameEntries.slice(0, 3).map(e => e[0]));
+    }
     
     return valueMap;
   };
@@ -865,17 +1068,27 @@ export default function MapView() {
           // Using standard FeatureCollection format
           
           // Clean metro names by removing state abbreviations (everything after comma)
+          // But preserve the original name and extract state abbreviation for tooltips
           const cleanedData = {
             ...data,
-            features: data.features.map((feature: any) => ({
-              ...feature,
-              properties: {
-                ...feature.properties,
-                // Create a cleaned name without state abbreviation
-                NAME: feature.properties.NAME?.split(',')[0]?.trim() || feature.properties.NAME,
-                NAMELSAD: feature.properties.NAMELSAD?.split(',')[0]?.trim() || feature.properties.NAMELSAD
-              }
-            }))
+            features: data.features.map((feature: any) => {
+              const originalName = feature.properties.NAME || '';
+              const nameParts = originalName.split(',');
+              const cityName = nameParts[0]?.trim() || originalName;
+              const stateAbbr = nameParts.length > 1 ? nameParts[nameParts.length - 1]?.trim() : '';
+              
+              return {
+                ...feature,
+                properties: {
+                  ...feature.properties,
+                  // Create a cleaned name without state abbreviation for display
+                  NAME: cityName,
+                  NAMELSAD: feature.properties.NAMELSAD?.split(',')[0]?.trim() || feature.properties.NAMELSAD,
+                  // Store state abbreviation for tooltips
+                  STATE_ABBR: stateAbbr
+                }
+              };
+            })
           };
           
           setMetroData(cleanedData);
@@ -1046,6 +1259,7 @@ export default function MapView() {
     setIsDropdownOpen(false);
     setHoveredVariable(null);
     setTooltipPosition(null);
+    setShowMoMPercentage(false); // Reset MoM toggle when selecting a new variable
   };
 
   // Render state or national boundaries on the map
@@ -1101,8 +1315,7 @@ export default function MapView() {
     
     const valueMap = createValueMap();
     const { min, max } = getValueRange();
-    const isPercentage = isPercentageVariable(selectedVariable);
-    const isCurrency = isCurrencyVariable(selectedVariable);
+    const valueType = getValueType(selectedVariable);
     const isZordi = selectedVariable?.key?.toLowerCase().includes('zordi') || false;
     
     let dataToRender;
@@ -1122,9 +1335,9 @@ export default function MapView() {
             value: nationalValue?.value,
             date: nationalValue?.date,
             color: nationalValue?.value !== undefined ? getColorForValue(nationalValue.value, min, max) : '#e5e7eb',
-            isPercentage: isPercentage,
-            isCurrency: isCurrency,
+            valueType: valueType,
             isZordi: isZordi,
+            isMoM: showMoMPercentage,
             isNational: true
           }
         }))
@@ -1145,9 +1358,9 @@ export default function MapView() {
               value: dataPoint?.value,
               date: dataPoint?.date,
               color: dataPoint?.value !== undefined ? getColorForValue(dataPoint.value, min, max) : '#f3f4f6',
-              isPercentage: isPercentage,
-              isCurrency: isCurrency,
+              valueType: valueType,
               isZordi: isZordi,
+              isMoM: showMoMPercentage,
               isNational: false,
               variableName: selectedVariable?.name || ''
             }
@@ -1291,45 +1504,56 @@ export default function MapView() {
             // Has value - show it
             [
               'case',
-              ['get', 'isZordi'],
-              // ZORDI format: already a percentage, show as whole number
+              // MoM percentage format (already multiplied by 100)
+              ['get', 'isMoM'],
               [
                 'concat',
                 [
                   'number-format',
-                  ['round', ['get', 'value']],
-                  { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
-                ],
-                '%'
-              ],
-              ['get', 'isPercentage'],
-              // Percentage format (multiply by 100 for non-ZORDI)
-              [
-                'concat',
-                [
-                  'number-format',
-                  ['*', ['get', 'value'], 100],
+                  ['get', 'value'],
                   { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }
                 ],
                 '%'
               ],
-              ['get', 'isCurrency'],
-              // Currency format
+              ['get', 'isZordi'],
+              // ZORDI format: already a percentage, show with 2 decimals
               [
                 'concat',
-                '$',
                 [
-                  'number-format',
-                  ['round', ['get', 'value']],
-                  { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
-                ]
-              ],
-              // Default number format
-              [
-                'number-format',
-                ['round', ['get', 'value']],
-                { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
-              ]
+              'number-format',
+              ['get', 'value'],
+              { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }
+            ],
+            '%'
+          ],
+          ['==', ['get', 'valueType'], 'percent'],
+          // Percentage format (multiply by 100)
+          [
+            'concat',
+            [
+              'number-format',
+              ['*', ['get', 'value'], 100],
+              { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }
+            ],
+            '%'
+          ],
+          ['==', ['get', 'valueType'], 'currency'],
+          // Currency format
+          [
+            'concat',
+            '$',
+            [
+              'number-format',
+              ['round', ['get', 'value']],
+              { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
+            ]
+          ],
+          // Default number format
+          [
+            'number-format',
+            ['round', ['get', 'value']],
+            { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
+          ]
             ],
             // No data - show message
             selectedVariable ? 'No Data' : ''
@@ -1384,7 +1608,7 @@ export default function MapView() {
         }
       }
     };
-  }, [stateData, nationalData, mapLoaded, selectedVariable, metricData, currentGeoLevel, loadingMetricData]);
+  }, [stateData, nationalData, mapLoaded, selectedVariable, metricData, currentGeoLevel, loadingMetricData, showLocationDetail]);
 
   // Render county boundaries on the map
   useEffect(() => {
@@ -1420,8 +1644,7 @@ export default function MapView() {
     
     const valueMap = createValueMap();
     const { min, max } = getValueRange();
-    const isPercentage = isPercentageVariable(selectedVariable);
-    const isCurrency = isCurrencyVariable(selectedVariable);
+    const valueType = getValueType(selectedVariable);
     const isZordi = selectedVariable?.key?.toLowerCase().includes('zordi') || false;
     
     // Add colors to features based on metric data
@@ -1463,9 +1686,9 @@ export default function MapView() {
             value: dataPoint?.value,
             date: dataPoint?.date,
             color: dataPoint?.value !== undefined ? getColorForValue(dataPoint.value, min, max) : '#e5e7eb',
-            isPercentage: isPercentage,
-            isCurrency: isCurrency,
+            valueType: valueType,
             isZordi: isZordi,
+            isMoM: showMoMPercentage,
             variableName: selectedVariable?.name || ''
           }
         };
@@ -1592,45 +1815,56 @@ export default function MapView() {
             // Has value - show it
             [
               'case',
-              ['get', 'isZordi'],
-              // ZORDI format: already a percentage, show as whole number
+              // MoM percentage format (already multiplied by 100)
+              ['get', 'isMoM'],
               [
                 'concat',
                 [
                   'number-format',
-                  ['round', ['get', 'value']],
-                  { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
-                ],
-                '%'
-              ],
-              ['get', 'isPercentage'],
-              // Percentage format (multiply by 100 for non-ZORDI)
-              [
-                'concat',
-                [
-                  'number-format',
-                  ['*', ['get', 'value'], 100],
+                  ['get', 'value'],
                   { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }
                 ],
                 '%'
               ],
-              ['get', 'isCurrency'],
-              // Currency format
+              ['get', 'isZordi'],
+              // ZORDI format: already a percentage, show with 2 decimals
               [
                 'concat',
-                '$',
                 [
-                  'number-format',
-                  ['round', ['get', 'value']],
-                  { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
-                ]
-              ],
-              // Default number format
-              [
-                'number-format',
-                ['round', ['get', 'value']],
-                { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
-              ]
+              'number-format',
+              ['get', 'value'],
+              { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }
+            ],
+            '%'
+          ],
+          ['==', ['get', 'valueType'], 'percent'],
+          // Percentage format (multiply by 100)
+          [
+            'concat',
+            [
+              'number-format',
+              ['*', ['get', 'value'], 100],
+              { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }
+            ],
+            '%'
+          ],
+          ['==', ['get', 'valueType'], 'currency'],
+          // Currency format
+          [
+            'concat',
+            '$',
+            [
+              'number-format',
+              ['round', ['get', 'value']],
+              { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
+            ]
+          ],
+          // Default number format
+          [
+            'number-format',
+            ['round', ['get', 'value']],
+            { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
+          ]
             ],
             // No data - show message
             selectedVariable ? 'No Data' : ''
@@ -1665,7 +1899,7 @@ export default function MapView() {
     
     // NOTE: No cleanup function here - layers are removed explicitly when leaving county level
     // Having a cleanup function causes flashing because it runs on every effect re-run
-  }, [countyData, mapLoaded, selectedVariable, metricData, currentGeoLevel, loadingMetricData]);
+  }, [countyData, mapLoaded, selectedVariable, metricData, currentGeoLevel, loadingMetricData, showLocationDetail]);
 
   // Render metro boundaries on the map
   useEffect(() => {
@@ -1729,8 +1963,7 @@ export default function MapView() {
     
     const valueMap = createValueMap();
     const { min, max } = getValueRange();
-    const isPercentage = isPercentageVariable(selectedVariable);
-    const isCurrency = isCurrencyVariable(selectedVariable);
+    const valueType = getValueType(selectedVariable);
     const isZordi = selectedVariable?.key?.toLowerCase().includes('zordi') || false;
     
     // 🔍 DEBUG: Metro GeoJSON Key Check
@@ -1742,6 +1975,29 @@ export default function MapView() {
         sampleProps: firstMetro.properties,
         totalFeatures: metroData.features.length
       });
+      
+      // Search for Pine Bluff in GeoJSON
+      // Note: Census CBSA = 38220, but user's DB might use Zillow ID = 394980
+      const pineBluffGeo = metroData.features.find((f: any) => {
+        const name = f.properties?.NAME?.toLowerCase() || f.properties?.name?.toLowerCase() || '';
+        return name.includes('pine bluff');
+      });
+      if (pineBluffGeo) {
+        const cbsaInGeo = (pineBluffGeo.properties.CBSAFP || pineBluffGeo.properties.cbsa_code)?.toString();
+        const geoName = pineBluffGeo.properties.NAME || pineBluffGeo.properties.name;
+        const normalizedName = geoName?.toLowerCase().trim();
+        const hasCbsaMatch = valueMap.has(cbsaInGeo);
+        const hasNameMatch = valueMap.has(`name:${normalizedName}`);
+        console.log('🎯 Pine Bluff matching check:', {
+          geoJsonName: geoName,
+          geoJsonCBSA: cbsaInGeo,
+          cbsa_match: hasCbsaMatch ? 'YES ✅' : 'NO ❌',
+          name_fallback_match: hasNameMatch ? 'YES ✅' : 'NO ❌',
+          value: hasCbsaMatch ? valueMap.get(cbsaInGeo) : (hasNameMatch ? valueMap.get(`name:${normalizedName}`) : 'NO MATCH')
+        });
+      } else {
+        console.warn('❌ Pine Bluff NOT in GeoJSON features!');
+      }
     }
     
     // 🔍 DEBUG: Metro DB Key Check
@@ -1774,7 +2030,14 @@ export default function MapView() {
       features: metroData.features.map((feature: any, index: number) => {
         // Match by CBSA code (now using proper Census CBSA codes)
         const cbsaCode = (feature.properties.CBSAFP || feature.properties.cbsa_code || feature.properties.CBSA)?.toString().trim();
-        const dataPoint = valueMap.get(cbsaCode);
+        let dataPoint = valueMap.get(cbsaCode);
+        
+        // 🔥 FALLBACK: If no match by CBSA, try matching by metro name
+        // This handles cases where DB uses different IDs than Census CBSA codes
+        if (!dataPoint && feature.properties.NAME) {
+          const normalizedName = feature.properties.NAME.toLowerCase().trim();
+          dataPoint = valueMap.get(`name:${normalizedName}`);
+        }
         
         return {
           ...feature,
@@ -1784,9 +2047,9 @@ export default function MapView() {
             value: dataPoint?.value, // Keep original value for accurate calculations
             date: dataPoint?.date,
             color: dataPoint?.value !== undefined ? getColorForValue(dataPoint.value, min, max) : '#e5e7eb',
-            isPercentage: isPercentage,
-            isCurrency: isCurrency,
+            valueType: valueType,
             isZordi: isZordi,
+            isMoM: showMoMPercentage,
             variableName: selectedVariable?.name || ''
           }
         };
@@ -1878,45 +2141,56 @@ export default function MapView() {
             // Has value - show it
             [
               'case',
-              ['get', 'isZordi'],
-              // ZORDI format: already a percentage, show as whole number
+              // MoM percentage format (already multiplied by 100)
+              ['get', 'isMoM'],
               [
                 'concat',
                 [
                   'number-format',
-                  ['round', ['get', 'value']],
-                  { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
-                ],
-                '%'
-              ],
-              ['get', 'isPercentage'],
-              // Percentage format (multiply by 100 for non-ZORDI)
-              [
-                'concat',
-                [
-                  'number-format',
-                  ['*', ['get', 'value'], 100],
+                  ['get', 'value'],
                   { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }
                 ],
                 '%'
               ],
-              ['get', 'isCurrency'],
-              // Currency format
+              ['get', 'isZordi'],
+              // ZORDI format: already a percentage, show with 2 decimals
               [
                 'concat',
-                '$',
                 [
-                  'number-format',
-                  ['round', ['get', 'value']],
-                  { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
-                ]
-              ],
-              // Default number format
-              [
-                'number-format',
-                ['round', ['get', 'value']],
-                { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
-              ]
+              'number-format',
+              ['get', 'value'],
+              { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }
+            ],
+            '%'
+          ],
+          ['==', ['get', 'valueType'], 'percent'],
+          // Percentage format (multiply by 100)
+          [
+            'concat',
+            [
+              'number-format',
+              ['*', ['get', 'value'], 100],
+              { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }
+            ],
+            '%'
+          ],
+          ['==', ['get', 'valueType'], 'currency'],
+          // Currency format
+          [
+            'concat',
+            '$',
+            [
+              'number-format',
+              ['round', ['get', 'value']],
+              { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
+            ]
+          ],
+          // Default number format
+          [
+            'number-format',
+            ['round', ['get', 'value']],
+            { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
+          ]
             ],
             // No data - show message
             selectedVariable ? 'No Data' : ''
@@ -1967,7 +2241,7 @@ export default function MapView() {
         }
       }
     };
-  }, [metroData, mapLoaded, selectedVariable, metricData, currentGeoLevel, loadingMetricData]);
+  }, [metroData, mapLoaded, selectedVariable, metricData, currentGeoLevel, loadingMetricData, showLocationDetail]);
 
   // Render ZIP code boundaries on the map
   useEffect(() => {
@@ -2003,8 +2277,7 @@ export default function MapView() {
     
     const valueMap = createValueMap();
     const { min, max } = getValueRange();
-    const isPercentage = isPercentageVariable(selectedVariable);
-    const isCurrency = isCurrencyVariable(selectedVariable);
+    const valueType = getValueType(selectedVariable);
     const isZordi = selectedVariable?.key?.toLowerCase().includes('zordi') || false;
     
     // Add new ZIP boundaries with generated IDs and colors
@@ -2023,9 +2296,9 @@ export default function MapView() {
             value: dataPoint?.value,
             date: dataPoint?.date,
             color: dataPoint?.value !== undefined ? getColorForValue(dataPoint.value, min, max) : '#e5e7eb',
-            isPercentage: isPercentage,
-            isCurrency: isCurrency,
+            valueType: valueType,
             isZordi: isZordi,
+            isMoM: showMoMPercentage,
             variableName: selectedVariable?.name || ''
           }
         };
@@ -2035,8 +2308,7 @@ export default function MapView() {
         geometry: geometry,
         properties: {
           color: '#e5e7eb',
-          isPercentage: isPercentage,
-          isCurrency: isCurrency
+          valueType: valueType
         }
       }))
     };
@@ -2178,45 +2450,56 @@ export default function MapView() {
             // Has value - show it
             [
               'case',
-              ['get', 'isZordi'],
-              // ZORDI format: already a percentage, show as whole number
+              // MoM percentage format (already multiplied by 100)
+              ['get', 'isMoM'],
               [
                 'concat',
                 [
                   'number-format',
-                  ['round', ['get', 'value']],
-                  { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
-                ],
-                '%'
-              ],
-              ['get', 'isPercentage'],
-              // Percentage format (multiply by 100 for non-ZORDI)
-              [
-                'concat',
-                [
-                  'number-format',
-                  ['*', ['get', 'value'], 100],
+                  ['get', 'value'],
                   { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }
                 ],
                 '%'
               ],
-              ['get', 'isCurrency'],
-              // Currency format
+              ['get', 'isZordi'],
+              // ZORDI format: already a percentage, show with 2 decimals
               [
                 'concat',
-                '$',
                 [
-                  'number-format',
-                  ['round', ['get', 'value']],
-                  { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
-                ]
-              ],
-              // Default number format
-              [
-                'number-format',
-                ['round', ['get', 'value']],
-                { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
-              ]
+              'number-format',
+              ['get', 'value'],
+              { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }
+            ],
+            '%'
+          ],
+          ['==', ['get', 'valueType'], 'percent'],
+          // Percentage format (multiply by 100)
+          [
+            'concat',
+            [
+              'number-format',
+              ['*', ['get', 'value'], 100],
+              { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }
+            ],
+            '%'
+          ],
+          ['==', ['get', 'valueType'], 'currency'],
+          // Currency format
+          [
+            'concat',
+            '$',
+            [
+              'number-format',
+              ['round', ['get', 'value']],
+              { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
+            ]
+          ],
+          // Default number format
+          [
+            'number-format',
+            ['round', ['get', 'value']],
+            { 'min-fraction-digits': 0, 'max-fraction-digits': 0 }
+          ]
             ],
             // No data - show message
             selectedVariable ? 'No Data' : ''
@@ -2251,7 +2534,7 @@ export default function MapView() {
 
     // NOTE: No cleanup function here - layers are removed explicitly when leaving zip level
     // Having a cleanup function causes flashing because it runs on every effect re-run
-  }, [zipData, mapLoaded, selectedVariable, metricData, currentGeoLevel, loadingMetricData]);
+  }, [zipData, mapLoaded, selectedVariable, metricData, currentGeoLevel, loadingMetricData, showLocationDetail]);
 
   // Handle map load
   const handleMapLoad = () => {
@@ -2654,10 +2937,210 @@ export default function MapView() {
     };
   }, []);
 
+  // Handle incoming search location from homepage
+  useEffect(() => {
+    const state = location.state as { searchLocation?: string } | null;
+    if (state?.searchLocation && locationInputRef.current && locationAutocomplete) {
+      // Set the input value to trigger the autocomplete
+      setLocationSearchQuery(state.searchLocation);
+      locationInputRef.current.value = state.searchLocation;
+      
+      // Trigger the place search using Google Places Service
+      const service = new google.maps.places.AutocompleteService();
+      service.getPlacePredictions(
+        {
+          input: state.searchLocation,
+          componentRestrictions: { country: 'us' },
+          types: ['(regions)']
+        },
+        (predictions, status) => {
+          if (status === google.maps.places.PlacesServiceStatus.OK && predictions && predictions.length > 0) {
+            // Get the first prediction and fetch its details
+            const placesService = new google.maps.places.PlacesService(document.createElement('div'));
+            placesService.getDetails(
+              {
+                placeId: predictions[0].place_id,
+                fields: ['address_components', 'geometry', 'formatted_address']
+              },
+              (place, detailStatus) => {
+                if (detailStatus === google.maps.places.PlacesServiceStatus.OK && place) {
+                  // Process the place the same way as the autocomplete does
+                  if (!place?.address_components || !place.geometry?.location) {
+                    return;
+                  }
+
+                  // Extract location information
+                  let county = '';
+                  let city = '';
+                  let state = '';
+                  let stateFullName = '';
+                  let zipCode = '';
+                  let hasStreetNumber = false;
+                  let hasRoute = false;
+
+                  for (const component of place.address_components) {
+                    const types = component.types;
+                    
+                    if (types.includes('administrative_area_level_2')) {
+                      county = component.long_name;
+                    }
+                    if (types.includes('locality')) {
+                      city = component.long_name;
+                    }
+                    if (types.includes('administrative_area_level_1')) {
+                      state = component.short_name;
+                      stateFullName = component.long_name;
+                    }
+                    if (types.includes('postal_code')) {
+                      zipCode = component.long_name;
+                    }
+                    if (types.includes('street_number')) {
+                      hasStreetNumber = true;
+                    }
+                    if (types.includes('route')) {
+                      hasRoute = true;
+                    }
+                  }
+
+                  // Reject street addresses
+                  if (hasStreetNumber && hasRoute) {
+                    return;
+                  }
+
+                  const isStateSearch = stateFullName && !city && !county && !zipCode;
+
+                  if (!stateFullName && !county && !city && !zipCode) {
+                    return;
+                  }
+
+                  // Determine zoom level and display name
+                  let zoom = 8;
+                  let displayName = '';
+
+                  if (zipCode) {
+                    zoom = 11.5;
+                    displayName = zipCode;
+                  } else if (city) {
+                    zoom = 7.4;
+                    displayName = `${city}${state ? ', ' + state : ''}`;
+                  } else if (county) {
+                    zoom = 9.9;
+                    displayName = `${county}${state ? ', ' + state : ''}`;
+                  } else if (isStateSearch) {
+                    zoom = 5.4;
+                    displayName = stateFullName;
+                  }
+
+                  setLocationSearchQuery(displayName);
+
+                  // Fly to the location
+                  if (mapRef.current) {
+                    const map = mapRef.current;
+                    
+                    map.flyTo({
+                      center: [place.geometry!.location!.lng(), place.geometry!.location!.lat()],
+                      zoom: zoom,
+                      duration: 2000
+                    });
+                    
+                    map.once('moveend', () => {
+                      map.resize();
+                      map.triggerRepaint();
+                    });
+                  }
+                }
+              }
+            );
+          }
+        }
+      );
+    }
+  }, [location.state, locationAutocomplete, mapRef]);
+
   // Handle map click
-  const handleMapClick = async (_event: any) => {
-    // Map click handler - currently not used for heat map
-    // Can be used later for showing details on click
+  const handleMapClick = async (event: any) => {
+    if (!mapRef.current || !selectedVariable) {
+      return;
+    }
+
+    const map = mapRef.current.getMap();
+    const geoLevel = getGeoLevel(viewState.zoom);
+    
+    // Determine which layer to query based on geo level
+    let layerId: string;
+    if (geoLevel === 'national') {
+      layerId = 'state-fill'; // National is rendered using states
+    } else if (geoLevel === 'state') {
+      layerId = 'state-fill';
+    } else if (geoLevel === 'metro') {
+      layerId = 'metro-fill';
+    } else if (geoLevel === 'county') {
+      layerId = 'county-fill';
+    } else {
+      layerId = 'zip-fill';
+    }
+    
+    // Check if the layer exists
+    if (!map.getLayer(layerId)) {
+      return;
+    }
+    
+    // Query features at click point
+    const features = map.queryRenderedFeatures(event.point, {
+      layers: [layerId]
+    });
+    
+    if (features.length === 0) {
+      return;
+    }
+    
+    const feature = features[0];
+    const props = feature.properties;
+    
+    // Skip if no properties
+    if (!props) {
+      return;
+    }
+    
+    // Get location name based on geo level
+    let locationName = '';
+    if (geoLevel === 'national') {
+      locationName = 'United States';
+    } else if (geoLevel === 'state') {
+      locationName = props.name || props.NAME || '';
+    } else if (geoLevel === 'metro') {
+      // For metros, use NAME and append state if available
+      const metroName = props.NAME || props.name || '';
+      const stateAbbr = props.STATE_ABBR || props.state_abbr || '';
+      locationName = stateAbbr ? `${metroName}, ${stateAbbr}` : metroName;
+    } else if (geoLevel === 'county') {
+      // For counties, use the same FIPS to state abbreviation logic as hover tooltips
+      const stateFipsToAbbr: Record<string, string> = {
+        '01': 'AL', '02': 'AK', '04': 'AZ', '05': 'AR', '06': 'CA', '08': 'CO', '09': 'CT', '10': 'DE', '11': 'DC',
+        '12': 'FL', '13': 'GA', '15': 'HI', '16': 'ID', '17': 'IL', '18': 'IN', '19': 'IA', '20': 'KS', '21': 'KY',
+        '22': 'LA', '23': 'ME', '24': 'MD', '25': 'MA', '26': 'MI', '27': 'MN', '28': 'MS', '29': 'MO', '30': 'MT',
+        '31': 'NE', '32': 'NV', '33': 'NH', '34': 'NJ', '35': 'NM', '36': 'NY', '37': 'NC', '38': 'ND', '39': 'OH',
+        '40': 'OK', '41': 'OR', '42': 'PA', '44': 'RI', '45': 'SC', '46': 'SD', '47': 'TN', '48': 'TX', '49': 'UT',
+        '50': 'VT', '51': 'VA', '53': 'WA', '54': 'WV', '55': 'WI', '56': 'WY'
+      };
+      
+      const countyName = props.NAME || props.name || '';
+      const stateFips = props.STATE || props.STATEFP || '';
+      const stateAbbr = stateFipsToAbbr[stateFips] || '';
+      
+      locationName = stateAbbr ? `${countyName} County, ${stateAbbr}` : `${countyName} County`;
+    } else if (geoLevel === 'zip') {
+      locationName = props.ZCTA5CE10 || props.zcta || '';
+    }
+    
+    // Only show detail if the location has data
+    if (props.value !== undefined && props.value !== null) {
+      setSelectedLocation({
+        name: locationName,
+        geoLevel: geoLevel
+      });
+      setShowLocationDetail(true);
+    }
   };
 
   const handleMapMouseMove = (event: any) => {
@@ -2741,6 +3224,11 @@ export default function MapView() {
                    props.ZCTA ||
                    'Unknown';
         
+        // For metros, append state abbreviation if available
+        if (geoLevel === 'metro' && props.NAME && props.STATE_ABBR) {
+          name = `${props.NAME}, ${props.STATE_ABBR}`;
+        }
+        
         // For counties, append "County" and state abbreviation
         if (geoLevel === 'county' && props.NAME) {
           // Map FIPS codes to state abbreviations
@@ -2774,15 +3262,17 @@ export default function MapView() {
     }
   };
 
-  // Group database variables by category
-  const groupedDatabaseVariables = databaseVariables.reduce((acc, variable) => {
-    const category = variable.category || 'Other';
-    if (!acc[category]) {
-      acc[category] = [];
-    }
-    acc[category].push(variable);
-    return acc;
-  }, {} as Record<string, Variable[]>);
+  // Group database variables by category, filtering out MoM and YoY variables
+  const groupedDatabaseVariables = databaseVariables
+    .filter(v => !v.key?.endsWith('_mm') && !v.key?.endsWith('_yy'))
+    .reduce((acc, variable) => {
+      const category = variable.category || 'Other';
+      if (!acc[category]) {
+        acc[category] = [];
+      }
+      acc[category].push(variable);
+      return acc;
+    }, {} as Record<string, Variable[]>);
 
   const filteredDatabaseVariables = Object.entries(groupedDatabaseVariables)
     .reduce((acc, [category, variables]) => {
@@ -2795,6 +3285,22 @@ export default function MapView() {
       return acc;
     }, {} as Record<string, Variable[]>);
 
+  // Show location detail page if a location is selected
+  if (showLocationDetail && selectedLocation && selectedVariable) {
+    return (
+      <LocationDetail
+        locationName={selectedLocation.name}
+        geoLevel={selectedLocation.geoLevel}
+        variableName={selectedVariable.name}
+        variableId={selectedVariable.id}
+        onBack={() => {
+          setShowLocationDetail(false);
+          setSelectedLocation(null);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="relative">
       {/* Map Container - Full Height */}
@@ -2804,7 +3310,7 @@ export default function MapView() {
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex flex-col md:flex-row gap-3 w-auto max-w-4xl">
             {/* Location Search */}
             <div className="w-80" onMouseEnter={() => setHoveredFeature(null)}>
-              <div className="bg-white/60 dark:bg-gray-800/60 backdrop-blur-md rounded-lg border border-gray-200/50 dark:border-gray-700/50 shadow-lg p-3">
+              <div className="bg-white/60 dark:bg-gray-800/60 backdrop-blur-md rounded-lg border border-gray-200/50 dark:border-gray-700/50 shadow-lg p-3 h-[88px]">
                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Search Location
                 </label>
@@ -2817,7 +3323,7 @@ export default function MapView() {
                     type="text"
                     value={locationSearchQuery}
                     onChange={(e) => setLocationSearchQuery(e.target.value)}
-                    placeholder="Search County, City, or ZIP"
+                    placeholder="Search State, County, City, or ZIP"
                     className="w-full pl-9 pr-3 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 rounded-lg font-medium focus:outline-none focus:ring-2 focus:ring-brand-500 placeholder-gray-400"
                   />
                 </div>
@@ -2825,108 +3331,136 @@ export default function MapView() {
             </div>
 
             {/* Variable Selection */}
-            <div className="w-80" onMouseEnter={() => setHoveredFeature(null)}>
-              <div className="bg-white/60 dark:bg-gray-800/60 backdrop-blur-md rounded-lg border border-gray-200/50 dark:border-gray-700/50 shadow-lg p-3">
-                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Select Variable
-                </label>
-                <div className="relative" ref={dropdownRef}>
-                  <button
-                    type="button"
-                    onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                    className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 rounded-lg font-medium flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
-                  >
-                    <span className="flex-1 text-left truncate">
-                      {selectedVariable ? selectedVariable.name : 'Select variable'}
-                    </span>
-                    {isDropdownOpen ? (
-                      <ChevronUp className="w-4 h-4 flex-shrink-0" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 flex-shrink-0" />
-                    )}
-                  </button>
+            <div className="w-auto" onMouseEnter={() => setHoveredFeature(null)}>
+              <div className="bg-white/60 dark:bg-gray-800/60 backdrop-blur-md rounded-lg border border-gray-200/50 dark:border-gray-700/50 shadow-lg p-3 h-[88px]">
+                <div className="flex items-start justify-between mb-2">
+                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300">
+                    Select Variable
+                  </label>
+                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300">
+                    MoM %
+                  </label>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="relative" ref={dropdownRef}>
+                    <button
+                      type="button"
+                      onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                      className="w-80 px-3 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 rounded-lg font-medium flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                    >
+                      <span className="flex-1 text-left truncate">
+                        {selectedVariable ? selectedVariable.name : 'Select variable'}
+                      </span>
+                      {isDropdownOpen ? (
+                        <ChevronUp className="w-4 h-4 flex-shrink-0" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4 flex-shrink-0" />
+                      )}
+                    </button>
 
                   {/* Dropdown Menu */}
                   {isDropdownOpen && (
                     <div className="absolute top-full left-0 right-0 mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl z-[100] max-h-[500px] overflow-y-auto">
-              {/* Search Bar */}
-              <div className="bg-white dark:bg-gray-800 p-3 border-b border-gray-200 dark:border-gray-700">
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search variables..."
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 text-sm"
-                />
-              </div>
-
-              <div className="p-2">
-                {loadingVariables ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="w-6 h-6 animate-spin text-brand-500" />
-                    <span className="ml-2 text-sm text-gray-600 dark:text-gray-400">Loading variables...</span>
-                  </div>
-                ) : (
-                  <>
-                    {/* Database Variables grouped by category */}
-                    {Object.entries(filteredDatabaseVariables).length > 0 ? (
-                      Object.entries(filteredDatabaseVariables)
-                        .sort(([a], [b]) => a.localeCompare(b))
-                        .map(([category, variables]) => (
-                          <div key={category} className="mt-2">
-                            <div className="px-3 py-1.5 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700">
-                              {category}
-                            </div>
-                            {variables.map((variable) => (
-                              <div key={variable.id} className="relative">
-                                <button
-                                  onClick={() => handleVariableSelect(variable)}
-                                  className={`w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${
-                                    selectedVariable?.id === variable.id ? 'bg-gray-100 dark:bg-gray-700' : ''
-                                  }`}
-                                >
-                                  <div className="flex items-center justify-between gap-2">
-                                    <span className="text-sm text-gray-700 dark:text-gray-300 flex-1">{variable.name}</span>
-                                    {variable.description && (
-                                      <div
-                                        onMouseEnter={(e) => {
-                                          e.stopPropagation();
-                                          const rect = e.currentTarget.getBoundingClientRect();
-                                          setHoveredVariable(variable.id);
-                                          setTooltipPosition({
-                                            x: rect.right,
-                                            y: rect.top + rect.height / 2
-                                          });
-                                        }}
-                                        onMouseLeave={(e) => {
-                                          e.stopPropagation();
-                                          setHoveredVariable(null);
-                                          setTooltipPosition(null);
-                                        }}
-                                        className="flex-shrink-0"
-                                      >
-                                        <Info className="w-4 h-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" />
-                                      </div>
-                                    )}
-                                  </div>
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        ))
-                    ) : (
-                      <div className="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-                        No variables found
+                      {/* Search Bar */}
+                      <div className="bg-white dark:bg-gray-800 p-3 border-b border-gray-200 dark:border-gray-700">
+                        <input
+                          type="text"
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          placeholder="Search variables..."
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 text-sm"
+                        />
                       </div>
-                    )}
-                  </>
-                )}
-              </div>
+
+                      <div className="p-2">
+                        {loadingVariables ? (
+                          <div className="flex items-center justify-center py-8">
+                            <Loader2 className="w-6 h-6 animate-spin text-brand-500" />
+                            <span className="ml-2 text-sm text-gray-600 dark:text-gray-400">Loading variables...</span>
+                          </div>
+                        ) : (
+                          <>
+                            {/* Database Variables grouped by category */}
+                            {Object.entries(filteredDatabaseVariables).length > 0 ? (
+                              Object.entries(filteredDatabaseVariables)
+                                .sort(([a], [b]) => a.localeCompare(b))
+                                .map(([category, variables]) => (
+                                  <div key={category} className="mt-2">
+                                    <div className="px-3 py-1.5 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700">
+                                      {category}
+                                    </div>
+                                    {variables.map((variable) => (
+                                      <div key={variable.id} className="relative">
+                                        <button
+                                          onClick={() => handleVariableSelect(variable)}
+                                          className={`w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${
+                                            selectedVariable?.id === variable.id ? 'bg-gray-100 dark:bg-gray-700' : ''
+                                          }`}
+                                        >
+                                          <div className="flex items-center justify-between gap-2">
+                                            <span className="text-sm text-gray-700 dark:text-gray-300 flex-1">{variable.name}</span>
+                                            {variable.description && (
+                                              <div
+                                                onMouseEnter={(e) => {
+                                                  e.stopPropagation();
+                                                  const rect = e.currentTarget.getBoundingClientRect();
+                                                  setHoveredVariable(variable.id);
+                                                  setTooltipPosition({
+                                                    x: rect.right,
+                                                    y: rect.top + rect.height / 2
+                                                  });
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                  e.stopPropagation();
+                                                  setHoveredVariable(null);
+                                                  setTooltipPosition(null);
+                                                }}
+                                                className="flex-shrink-0"
+                                              >
+                                                <Info className="w-4 h-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" />
+                                              </div>
+                                            )}
+                                          </div>
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ))
+                            ) : (
+                              <div className="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
+                                No variables found
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
             </div>
           )}
                 </div>
+                
+                {/* MoM % Toggle - always visible */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMoMPercentage(!showMoMPercentage);
+                    setMetricDataCache({}); // Clear cache to fetch new data
+                  }}
+                  disabled={!selectedVariable}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 ${
+                    showMoMPercentage
+                      ? 'bg-brand-500'
+                      : 'bg-gray-200 dark:bg-gray-700'
+                  } ${!selectedVariable ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      showMoMPercentage ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
               </div>
             </div>
+          </div>
           </div>
           
           {/* Tooltip Portal - rendered outside dropdown */}
@@ -3044,33 +3578,15 @@ export default function MapView() {
             const { min, max, actualMin, actualMax } = getValueRange();
             if (min === 0 && max === 0) return null;
             
-            const isPercentage = isPercentageVariable(selectedVariable);
-            const isCurrency = isCurrencyVariable(selectedVariable);
-            const isZordi = selectedVariable.key?.toLowerCase().includes('zordi') || false;
-            
-            const formatValue = (val: number) => {
-              if (isPercentage) {
-                if (isZordi) {
-                  // ZORDI values are already percentages, just format as whole number
-                  return `${Math.round(val)}%`;
-                }
-                return `${(val * 100).toFixed(2)}%`;
-              }
-              if (isCurrency) {
-                return `$${Math.round(val).toLocaleString()}`;
-              }
-              return Math.round(val).toLocaleString();
-            };
-            
             return (
               <div className="absolute bottom-8 right-4 z-20">
                 <div className="bg-white/60 dark:bg-gray-800/60 backdrop-blur-md rounded-lg border border-gray-200/50 dark:border-gray-700/50 shadow-lg p-3">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-600 dark:text-gray-400">{formatValue(actualMin)}</span>
+                    <span className="text-xs text-gray-600 dark:text-gray-400">{formatValue(actualMin, selectedVariable)}</span>
                     <div className="w-32 h-3 rounded" style={{
                       background: 'linear-gradient(to right, rgb(59, 130, 246), rgb(147, 197, 253), rgb(255, 255, 255), rgb(252, 165, 165), rgb(239, 68, 68))'
                     }}></div>
-                    <span className="text-xs text-gray-600 dark:text-gray-400">{formatValue(actualMax)}</span>
+                    <span className="text-xs text-gray-600 dark:text-gray-400">{formatValue(actualMax, selectedVariable)}</span>
                   </div>
                 </div>
               </div>
@@ -3079,25 +3595,8 @@ export default function MapView() {
 
           {/* Hover Tooltip */}
           {showTooltip && hoveredFeature && selectedVariable && (() => {
-            const isPercentage = isPercentageVariable(selectedVariable);
-            const isCurrency = isCurrencyVariable(selectedVariable);
             const description = selectedVariable.description || '';
             const source = selectedVariable.key ? (variableSources[selectedVariable.key] || 'Realtor.com') : 'Realtor.com';
-            const isZordi = selectedVariable.key?.toLowerCase().includes('zordi') || false;
-            
-            const formatValue = (val: number) => {
-              if (isPercentage) {
-                if (isZordi) {
-                  // ZORDI values are already percentages, just format as whole number
-                  return `${Math.round(val)}%`;
-                }
-                return `${(val * 100).toFixed(2)}%`;
-              }
-              if (isCurrency) {
-                return `$${Math.round(val).toLocaleString()}`;
-              }
-              return Math.round(val).toLocaleString();
-            };
 
             const formatDate = (dateStr: string) => {
               // Parse date without timezone conversion and add 1 month
@@ -3150,7 +3649,7 @@ export default function MapView() {
                 <div className="bg-white/85 dark:bg-gray-800/85 backdrop-blur-md text-xs rounded-lg border border-gray-200/50 dark:border-gray-700/50 shadow-lg p-3 max-w-xs">
                   <div className="font-bold text-sm mb-1 text-gray-900 dark:text-gray-100">{hoveredFeature.name}</div>
                   <div className="font-semibold text-base mb-2" style={{ color: '#0D98BA' }}>
-                    {selectedVariable.name}: {formatValue(hoveredFeature.value)}
+                    {selectedVariable.name}: {formatValue(hoveredFeature.value, selectedVariable)}
                   </div>
                   {description && (
                     <div className="text-gray-700 dark:text-gray-300 mb-2 text-xs leading-relaxed">
@@ -3171,6 +3670,7 @@ export default function MapView() {
 
           {/* Map Component */}
           <MapGL
+            key={mapKey}
             ref={mapRef}
             {...viewState}
             onMove={evt => setViewState(evt.viewState)}

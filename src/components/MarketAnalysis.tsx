@@ -351,13 +351,15 @@ export default function MarketAnalysis({ userId, onNavigateToSupport }: MarketAn
                   {toolOptions.find(t => t.id === selectedTool)?.title}
                 </h2>
               </div>
-              <button
-                onClick={resetForm}
-                className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                Back to Market Analysis
-              </button>
+              {selectedTool !== 'map-view' && (
+                <button
+                  onClick={resetForm}
+                  className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  Back to Market Analysis
+                </button>
+              )}
             </div>
 
             {selectedTool === 'timeline-compare' ? (

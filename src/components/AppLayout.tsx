@@ -10,6 +10,7 @@ import TenantryAI from './TenantryAI';
 import RentEstimatorResults from './RentEstimatorResults';
 import ValueEstimatorResults from './ValueEstimatorResults';
 import ChatWidget from './ChatWidget';
+import MapView from './MapView';
 import { supabase } from '../lib/supabase';
 import type { User } from '@supabase/supabase-js';
 
@@ -226,6 +227,7 @@ export default function AppLayout({ user }: AppLayoutProps) {
             <Route path="/" element={<Navigate to="/app/dashboard" />} />
             <Route path="/dashboard" element={<Dashboard userId={user?.id} />} />
             <Route path="/my-reports" element={<MyReports userId={user?.id} />} />
+            <Route path="/map" element={<MapView />} />
             <Route path="/market-analysis" element={<MarketAnalysis userId={user?.id} />} />
             <Route path="/property-analysis" element={<PropertyAnalysis userId={user?.id} />} />
             <Route path="/property-analysis/results/:estimateId" element={<RentEstimatorResults userId={user?.id} />} />
@@ -240,23 +242,35 @@ export default function AppLayout({ user }: AppLayoutProps) {
       </div>
 
       {/* Tenantry AI Side Panel */}
-      {aiPanelOpen && (
-        <>
-          {/* Backdrop */}
-          <div 
-            className="fixed inset-0 bg-black bg-opacity-50 z-[60] transition-opacity"
-            onClick={toggleAiPanel}
-          />
-          
-          {/* Side Panel */}
-          <div className="fixed right-0 top-0 h-full w-[500px] bg-white dark:bg-gray-800 shadow-2xl z-[70] transform transition-transform duration-300 ease-in-out flex flex-col">
-            <TenantryAI user={user} onClose={toggleAiPanel} isPanel={true} />
-          </div>
-        </>
-      )}
+      {/* Backdrop */}
+      <div 
+        className={`fixed inset-0 bg-black z-[60] transition-opacity duration-300 ${
+          aiPanelOpen ? 'bg-opacity-50' : 'bg-opacity-0 pointer-events-none'
+        }`}
+        onClick={toggleAiPanel}
+      />
+      
+      {/* Side Panel */}
+      <div className={`fixed right-0 top-0 h-full w-[500px] bg-white/50 dark:bg-gray-800/50 backdrop-blur-xl shadow-2xl z-[70] transform transition-transform duration-300 ease-in-out flex flex-col border-l border-gray-200/30 dark:border-gray-700/30 ${
+        aiPanelOpen ? 'translate-x-0' : 'translate-x-full'
+      }`}>
+        <TenantryAI user={user} onClose={toggleAiPanel} isPanel={true} />
+      </div>
 
-      {/* Chat Widget */}
-      <ChatWidget userId={user?.id} />
+      {/* Floating Tenantry AI Button - Bottom Right */}
+      <button
+        onClick={toggleAiPanel}
+        className="fixed bottom-6 right-6 z-50 p-4 bg-brand-500 hover:bg-brand-600 text-white rounded-full shadow-lg transition-all transform hover:scale-110 group"
+        aria-label="Open Tenantry AI"
+      >
+        <Sparkles className="w-6 h-6" />
+        <span className="absolute right-full mr-3 top-1/2 -translate-y-1/2 bg-gray-900 dark:bg-gray-700 text-white text-sm px-3 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+          Ask Tenantry AI
+        </span>
+      </button>
+      
+      {/* Chat Widget - Not currently in use */}
+      {/* <ChatWidget userId={user?.id} /> */}
     </div>
   );
 }

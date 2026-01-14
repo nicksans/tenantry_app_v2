@@ -19,6 +19,7 @@ export default function LocationAutocomplete({
 }: LocationAutocompleteProps) {
   const [inputValue, setInputValue] = useState(value);
   const [showError, setShowError] = useState(false);
+  const [reinitKey, setReinitKey] = useState(0); // Key to force reinitialize
   const inputRef = useRef<HTMLInputElement>(null);
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
   const validSelectionRef = useRef<boolean>(false);
@@ -104,6 +105,8 @@ export default function LocationAutocomplete({
               validSelectionRef.current = true;
               lastValidValueRef.current = zipCode;
               setShowError(false);
+              // Force reinitialize after selection
+              setTimeout(() => setReinitKey(k => k + 1), 100);
               return;
             }
 
@@ -124,6 +127,8 @@ export default function LocationAutocomplete({
                 validSelectionRef.current = true;
                 lastValidValueRef.current = stateName;
                 setShowError(false);
+                // Force reinitialize after selection
+                setTimeout(() => setReinitKey(k => k + 1), 100);
                 return;
               }
             }
@@ -151,6 +156,8 @@ export default function LocationAutocomplete({
                 validSelectionRef.current = true;
                 lastValidValueRef.current = formattedLocation;
                 setShowError(false);
+                // Force reinitialize after selection
+                setTimeout(() => setReinitKey(k => k + 1), 100);
               }
             }
           }
@@ -174,7 +181,7 @@ export default function LocationAutocomplete({
         clearTimeout(blurTimeoutRef.current);
       }
     };
-  }, [locationType, onChange]);
+  }, [locationType, onChange, reinitKey]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value;
@@ -206,11 +213,97 @@ export default function LocationAutocomplete({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    // Prevent form submission if Enter is pressed without a valid selection
+    // On Enter, if user hasn't selected from dropdown but has typed something,
+    // trigger Google Places to get the first prediction
     if (e.key === 'Enter' && !validSelectionRef.current && inputValue.trim() !== '') {
       e.preventDefault();
-      setShowError(true);
-      setInputValue(lastValidValueRef.current);
+      
+      // Use AutocompleteService to get predictions and select the first one
+      const service = new google.maps.places.AutocompleteService();
+      service.getPlacePredictions(
+        {
+          input: inputValue,
+          componentRestrictions: { country: 'us' },
+          types: locationType === 'city' ? ['(cities)'] :
+                 locationType === 'zip' ? ['postal_code'] :
+                 locationType === 'state' ? ['administrative_area_level_1'] :
+                 ['(regions)']
+        },
+        (predictions, status) => {
+          if (status === google.maps.places.PlacesServiceStatus.OK && predictions && predictions.length > 0) {
+            // Get details for the first prediction
+            const placesService = new google.maps.places.PlacesService(document.createElement('div'));
+            placesService.getDetails(
+              {
+                placeId: predictions[0].place_id,
+                fields: ['address_components', 'formatted_address', 'types']
+              },
+              (place, detailStatus) => {
+                if (detailStatus === google.maps.places.PlacesServiceStatus.OK && place?.address_components) {
+                  // Process the place as if it was selected from autocomplete
+                  const postalComponent = place.address_components.find(component =>
+                    component.types.includes('postal_code')
+                  );
+
+                  if (postalComponent && (locationType === 'zip' || locationType === 'both')) {
+                    const zipCode = postalComponent.long_name;
+                    setInputValue(zipCode);
+                    onChange(zipCode);
+                    validSelectionRef.current = true;
+                    lastValidValueRef.current = zipCode;
+                    setShowError(false);
+                    return;
+                  }
+
+                  if (locationType === 'state') {
+                    const stateComponent = place.address_components.find(component =>
+                      component.types.includes('administrative_area_level_1')
+                    );
+
+                    if (stateComponent) {
+                      let stateName = stateComponent.long_name;
+                      if (stateName === 'New York') {
+                        stateName = 'New York State';
+                      }
+                      setInputValue(stateName);
+                      onChange(stateName);
+                      validSelectionRef.current = true;
+                      lastValidValueRef.current = stateName;
+                      setShowError(false);
+                      return;
+                    }
+                  }
+
+                  if (locationType === 'city' || locationType === 'both') {
+                    let city = '';
+                    let state = '';
+
+                    for (const component of place.address_components) {
+                      const types = component.types;
+                      
+                      if (types.includes('locality')) {
+                        city = component.long_name;
+                      }
+                      if (types.includes('administrative_area_level_1')) {
+                        state = component.short_name;
+                      }
+                    }
+
+                    if (city) {
+                      const formattedLocation = state ? `${city}, ${state}` : city;
+                      setInputValue(formattedLocation);
+                      onChange(formattedLocation);
+                      validSelectionRef.current = true;
+                      lastValidValueRef.current = formattedLocation;
+                      setShowError(false);
+                    }
+                  }
+                }
+              }
+            );
+          }
+        }
+      );
     }
   };
 
@@ -241,7 +334,7 @@ export default function LocationAutocomplete({
         className={`${className} ${showError ? '!border-red-500 dark:!border-red-500' : ''}`}
       />
       {showError && (
-        <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+        <p className="absolute left-0 top-full mt-1 text-sm text-red-600 dark:text-red-400 whitespace-nowrap">
           {getErrorMessage()}
         </p>
       )}
